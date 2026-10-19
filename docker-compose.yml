@@ -1,0 +1,79 @@
+name: buildshift
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-buildshift}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-buildshift}
+      POSTGRES_DB: ${POSTGRES_DB:-buildshift}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-buildshift} -d ${POSTGRES_DB:-buildshift}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    volumes:
+      - ./services/litellm/config.yaml:/app/config.yaml:ro
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-buildshift-local}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    command: ["--config", "/app/config.yaml", "--port", "4000", "--host", "0.0.0.0"]
+    ports:
+      - "127.0.0.1:4000:4000"
+    restart: unless-stopped
+
+  worker:
+    image: ${WORKER_IMAGE:-buildshift-worker:local}
+    build:
+      context: ./services/worker
+      dockerfile: Dockerfile
+      args:
+        INSTALL_CLAUDE: ${INSTALL_CLAUDE:-false}
+    profiles: ["build-only"]
+    command: ["true"]
+
+  orchestrator:
+    build:
+      context: ./apps/orchestrator
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      litellm:
+        condition: service_started
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://buildshift:buildshift@postgres:5432/buildshift}
+      TASK_BUDGET_USD: ${TASK_BUDGET_USD:-3.00}
+      DAILY_BUDGET_USD: ${DAILY_BUDGET_USD:-60.00}
+      MAX_PARALLEL_WORKERS: ${MAX_PARALLEL_WORKERS:-2}
+      MAX_ATTEMPTS_PER_TIER: ${MAX_ATTEMPTS_PER_TIER:-2}
+      HARNESS: ${HARNESS:-mock}
+      WORKER_IMAGE: ${WORKER_IMAGE:-buildshift-worker:local}
+      WORKER_NETWORK: ${WORKER_NETWORK:-buildshift_default}
+      DATA_DIR: /data
+      HOST_DATA_DIR: ${HOST_DATA_DIR:-${PWD}/data}
+      REPO_ROOT: /repo
+      PROVING_REPO_URL: ${PROVING_REPO_URL:-}
+      PROVING_REPO_BRANCH: ${PROVING_REPO_BRANCH:-main}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GITHUB_API_URL: ${GITHUB_API_URL:-https://api.github.com}
+      LITELLM_URL: http://litellm:4000
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-buildshift-local}
+      DEFAULT_IMPLEMENTER_MODEL: ${DEFAULT_IMPLEMENTER_MODEL:-claude-sonnet-4-5}
+    volumes:
+      - ./data:/data
+      - .:/repo:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "${ORCHESTRATOR_HOST:-127.0.0.1}:${ORCHESTRATOR_PORT:-8080}:8080"
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

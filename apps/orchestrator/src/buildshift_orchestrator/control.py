@@ -54,4 +54,7 @@ def add_daily_spend(db: Session, amount: Decimal) -> Decimal:
 
 
 def under_daily_budget(db: Session, settings: Settings) -> bool:
-    return daily_spend_usd(db) < Decimal(str(settings.daily_budget_usd))
+    from buildshift_orchestrator.runtime_settings import effective_settings
+
+    eff = effective_settings(settings)
+    return daily_spend_usd(db) < Decimal(str(eff.daily_budget_usd))

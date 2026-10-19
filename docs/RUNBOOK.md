@@ -7,34 +7,56 @@ Works on a laptop or a VPS with Docker. No PaaS required.
 - Docker Engine + Compose v2
 - Git
 - Make
-- Open ports only as needed (default: orchestrator on `127.0.0.1:8080`)
+- Open ports only as needed (default: orchestrator `127.0.0.1:8080`, office `127.0.0.1:3000`)
 
 ## First-time setup
 
 ```bash
 git clone <this-repo> buildshift && cd buildshift
 cp .env.example .env
-# Edit .env if you have keys / a proving repo. Defaults use HARNESS=mock.
+# .env = secrets + bootstrap. Day-to-day knobs → office Control panel.
 make up    # exports HOST_DATA_DIR for docker-from-docker mounts
 make smoke
 make smoke-week2
 make smoke-week25
+make smoke-week3
 ```
 
 `make` sets `HOST_DATA_DIR` to `$(CURDIR)/data` so the orchestrator can ask the host Docker daemon to mount checkouts correctly (required on Docker Desktop and any docker-from-docker setup).
+
+Office UI: `http://127.0.0.1:3000` — enter `OPERATOR_TOKEN` if set in `.env` (empty token = open local mode).
+
+In the office **Plan** panel you can upload or paste a markdown PRD (Index & kickoff), then Propose → Approve. CLI still works: `buildshift prd index /path/to.md`.
+
+## Control plane vs `.env`
+
+| Stay in `.env` | Live in Control (`runtime_settings` / office Control panel) |
+|----------------|--------------------------------------------------------------|
+| `DATABASE_URL`, ports, `HOST_DATA_DIR` | Role → model map |
+| `GITHUB_TOKEN`, LLM API keys, `LITELLM_MASTER_KEY` | Harness (`mock` / `claude`) |
+| `OPERATOR_TOKEN` | Budgets, max parallel, max attempts |
+| | Kill switch, proving repo/branch, multi-role flag |
+
+Seed: on first boot, settings are imported from env + `apps/orchestrator/config/router.yaml`. Afterwards prefer Control / CLI:
+
+```bash
+docker compose exec orchestrator buildshift control settings get
+docker compose exec orchestrator buildshift control settings set '{"limits":{"daily_budget_usd":80}}'
+```
 
 ## Everyday controls
 
 | Command | Effect |
 |---------|--------|
-| `make up` | Build + start Postgres, LiteLLM, orchestrator |
+| `make up` | Build + start Postgres, LiteLLM, orchestrator, dashboard |
 | `make down` | Stop containers; keep DB and `data/` |
 | `make down-wipe` | Stop and wipe DB volume + local repo cache |
-| `make logs` | Tail orchestrator |
+| `make logs` | Tail orchestrator + dashboard |
 | `make health` | `GET /health` |
 | `make smoke` | Week 1: one mock task end-to-end |
 | `make smoke-week2` | Week 2: PRD → plan approve → multi-role tasks |
 | `make smoke-week25` | Week 2.5: 12 tasks rebase → CI → land on base |
+| `make smoke-week3` | Week 3: settings PUT, SSE, HITL, office up |
 | `make kill ARGS=true` | Global kill switch on |
 
 ### Week 2 CLI flow
@@ -50,7 +72,7 @@ curl -s -X POST http://127.0.0.1:8080/plans/propose \
 curl -s -X POST http://127.0.0.1:8080/plans/<plan_id>/approve
 ```
 
-Role → model routing lives in `apps/orchestrator/config/router.yaml` (aliases must exist in `services/litellm/config.yaml`).
+Role → model routing is edited in the office **Control** panel (seeded from `apps/orchestrator/config/router.yaml`; aliases must exist in `services/litellm/config.yaml`).
 
 ### Week 2.5 merge queue
 

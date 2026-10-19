@@ -16,6 +16,7 @@ from buildshift_orchestrator.db import SessionLocal
 from buildshift_orchestrator.models import Task, TaskState
 from buildshift_orchestrator.runner.locks import recover_orphaned_inflight
 from buildshift_orchestrator.runner.pipeline import STAGE_STATE, run_task
+from buildshift_orchestrator.runtime_settings import effective_settings
 
 log = logging.getLogger(__name__)
 
@@ -108,13 +109,16 @@ class WorkerLoop:
                 log.warning("recovered %s orphaned inflight task(s) on startup", n)
         finally:
             db.close()
+        # Pool sized for control-plane max; claim gate uses effective max_parallel
+        pool_size = max(32, int(self.settings.max_parallel_workers))
         self._pool = ThreadPoolExecutor(
-            max_workers=self.settings.max_parallel_workers,
+            max_workers=pool_size,
             thread_name_prefix="buildshift-task",
         )
         self._thread = threading.Thread(target=self._run, name="buildshift-worker-loop", daemon=True)
         self._thread.start()
-        log.info("worker loop started (max_parallel=%s)", self.settings.max_parallel_workers)
+        eff = effective_settings(self.settings)
+        log.info("worker loop started (max_parallel=%s)", eff.max_parallel_workers)
 
     def stop(self) -> None:
         self._stop.set()
@@ -127,29 +131,31 @@ class WorkerLoop:
         assert self._pool is not None
         while not self._stop.is_set():
             try:
+                eff = effective_settings(self.settings)
+                poll = eff.poll_interval_sec
                 db = SessionLocal()
                 try:
                     recover_orphaned_inflight(db)
                     if is_kill_switch_on(db):
-                        time.sleep(self.settings.poll_interval_sec)
+                        time.sleep(poll)
                         continue
-                    if not under_daily_budget(db, self.settings):
+                    if not under_daily_budget(db, eff):
                         log.warning("daily budget exhausted; not claiming work")
-                        time.sleep(self.settings.poll_interval_sec)
+                        time.sleep(poll)
                         continue
-                    if count_inflight(db) >= self.settings.max_parallel_workers:
-                        time.sleep(self.settings.poll_interval_sec)
+                    if count_inflight(db) >= eff.max_parallel_workers:
+                        time.sleep(poll)
                         continue
                     task = claim_next_task(db)
                     if task is None:
-                        time.sleep(self.settings.poll_interval_sec)
+                        time.sleep(poll)
                         continue
                     task_id = task.id
                 finally:
                     db.close()
 
-                self._pool.submit(_execute_task, self.settings, task_id)
+                self._pool.submit(_execute_task, eff, task_id)
                 time.sleep(0.2)
             except Exception:
                 log.exception("worker loop iteration failed")
-                time.sleep(self.settings.poll_interval_sec)
+                time.sleep(effective_settings(self.settings).poll_interval_sec)

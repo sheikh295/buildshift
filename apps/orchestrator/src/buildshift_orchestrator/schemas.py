@@ -109,3 +109,88 @@ class KickoffOut(BaseModel):
     slug: str
     requirements: int
     human_items: int
+
+
+class EventOut(BaseModel):
+    id: int
+    ts: datetime
+    task_id: uuid.UUID | None = None
+    role: str | None = None
+    model: str | None = None
+    tier: str | None = None
+    kind: str
+    status: str | None = None
+    summary: str | None = None
+    cost_usd: Decimal
+    payload: dict = Field(default_factory=dict)
+
+    model_config = {"from_attributes": True}
+
+
+class HumanItemOut(BaseModel):
+    id: uuid.UUID
+    product_id: uuid.UUID | None = None
+    task_id: uuid.UUID | None = None
+    kind: str
+    summary: str
+    needed_by: str | None = None
+    status: str
+    reply: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class HumanItemCreate(BaseModel):
+    kind: str = "question"
+    summary: str
+    needed_by: str | None = None
+    task_id: uuid.UUID | None = None
+    product_id: uuid.UUID | None = None
+
+
+class HumanItemReplyIn(BaseModel):
+    reply: str
+
+
+class RuntimeSettingsOut(BaseModel):
+    version: int = 1
+    roles: dict = Field(default_factory=dict)
+    limits: dict = Field(default_factory=dict)
+    harness: str = "mock"
+    multi_role_pipeline: bool = True
+    poll_interval_sec: float = 2.0
+    proving_repo_url: str = ""
+    proving_repo_branch: str = "main"
+    kill_switch: bool = False
+    ui: dict = Field(default_factory=dict)
+    updated_at: datetime | None = None
+
+
+class RuntimeSettingsIn(BaseModel):
+    """Partial update; nested roles/limits are deep-merged."""
+
+    roles: dict | None = None
+    limits: dict | None = None
+    harness: str | None = None
+    multi_role_pipeline: bool | None = None
+    poll_interval_sec: float | None = None
+    proving_repo_url: str | None = None
+    proving_repo_branch: str | None = None
+    kill_switch: bool | None = None
+    ui: dict | None = None
+
+
+class EodDigestOut(BaseModel):
+    day: str
+    counts_by_state: dict[str, int]
+    merged: int
+    reviewing: int
+    blocked_human: int
+    parked: int
+    failed: int
+    spend_usd: float
+    open_hitl: int
+    recent_events: list[EventOut]
+    risks: list[str]

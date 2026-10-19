@@ -50,6 +50,7 @@ services:
         condition: service_started
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://buildshift:buildshift@postgres:5432/buildshift}
+      # Bootstrap defaults only — day-to-day knobs live in Control plane (runtime_settings)
       TASK_BUDGET_USD: ${TASK_BUDGET_USD:-3.00}
       DAILY_BUDGET_USD: ${DAILY_BUDGET_USD:-60.00}
       MAX_PARALLEL_WORKERS: ${MAX_PARALLEL_WORKERS:-4}
@@ -69,6 +70,8 @@ services:
       DEFAULT_IMPLEMENTER_MODEL: ${DEFAULT_IMPLEMENTER_MODEL:-claude-sonnet-4-5}
       ROUTER_CONFIG_PATH: /app/config/router.yaml
       MULTI_ROLE_PIPELINE: ${MULTI_ROLE_PIPELINE:-true}
+      OPERATOR_TOKEN: ${OPERATOR_TOKEN:-}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://127.0.0.1:3000,http://localhost:3000}
     volumes:
       - ./data:/data
       - .:/repo:ro
@@ -76,6 +79,19 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     ports:
       - "${ORCHESTRATOR_HOST:-127.0.0.1}:${ORCHESTRATOR_PORT:-8080}:8080"
+    restart: unless-stopped
+
+  dashboard:
+    build:
+      context: ./apps/dashboard
+      dockerfile: Dockerfile
+    depends_on:
+      - orchestrator
+    environment:
+      ORCHESTRATOR_URL: http://orchestrator:8080
+      OPERATOR_TOKEN: ${OPERATOR_TOKEN:-}
+    ports:
+      - "${DASHBOARD_HOST:-127.0.0.1}:${DASHBOARD_PORT:-3000}:3000"
     restart: unless-stopped
 
 volumes:

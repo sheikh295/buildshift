@@ -1,5 +1,21 @@
 # apps/dashboard
 
-Next.js control UI (task board, live logs via SSE, HITL inbox, morning planning, EOD digest).
+Buildshift **office UI** — Phaser 3 floor + React HUD (HITL, board, plan, EOD, control plane).
 
-**Status:** placeholder. Week 1 ships CLI + API only. Implementation follows the solution design in `docs/AI-Software-House-Solution.md` §14.
+## Local (outside Compose)
+
+```bash
+cd apps/dashboard
+npm install
+ORCHESTRATOR_URL=http://127.0.0.1:8080 OPERATOR_TOKEN= npm run dev
+```
+
+Open http://127.0.0.1:3000 — login with the same `OPERATOR_TOKEN` as the orchestrator (leave empty when both are unset).
+
+## Compose
+
+`make up` starts the `dashboard` service on `127.0.0.1:3000`. Orchestrator API is proxied via `/api/orch/*` and SSE via `/api/events/stream`.
+
+Day-to-day knobs live in **Control** (Postgres `runtime_settings`), not `.env`.
+
+**Plan panel:** upload or paste a markdown PRD → Index & kickoff → Propose → Approve.

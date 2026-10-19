@@ -47,7 +47,13 @@ class Settings(BaseSettings):
     litellm_master_key: str = "sk-buildshift-local"
     default_implementer_model: str = "claude-sonnet-4-5"
 
+    # Office / API auth (empty = open, for local smoke). Dashboard sends Bearer or X-Operator-Token.
+    operator_token: str = ""
+
     poll_interval_sec: float = 2.0
+
+    # CORS origins for dashboard (comma-separated). Empty → allow localhost:3000.
+    cors_origins: str = "http://127.0.0.1:3000,http://localhost:3000"
 
 
 @lru_cache

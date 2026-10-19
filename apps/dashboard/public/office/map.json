@@ -1,0 +1,20 @@
+{
+  "id": "default",
+  "width": 960,
+  "height": 540,
+  "tile": 32,
+  "zones": {
+    "planner": { "x": 80, "y": 80, "label": "Planning" },
+    "test_author": { "x": 280, "y": 80, "label": "QA" },
+    "implementer": { "x": 480, "y": 80, "label": "Build" },
+    "reviewer": { "x": 680, "y": 80, "label": "Review" },
+    "integrating": { "x": 480, "y": 280, "label": "Integrate" },
+    "exit": { "x": 860, "y": 400, "label": "Merged" }
+  },
+  "roles": {
+    "planner": { "color": "#3d8bfd" },
+    "test_author": { "color": "#2dd4a8" },
+    "implementer": { "color": "#f0a202" },
+    "reviewer": { "color": "#c084fc" }
+  }
+}

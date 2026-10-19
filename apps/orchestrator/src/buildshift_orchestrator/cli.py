@@ -85,6 +85,34 @@ def kill(enabled: bool = typer.Argument(..., help="true/false")) -> None:
         _echo(resp.json())
 
 
+settings_app = typer.Typer(help="Runtime settings (control plane)")
+control_app.add_typer(settings_app, name="settings")
+
+
+@settings_app.command("get")
+def settings_get() -> None:
+    """Show merged runtime settings from the control plane."""
+    with httpx.Client(timeout=10.0) as client:
+        resp = client.get(f"{_base_url()}/control/settings")
+        resp.raise_for_status()
+        _echo(resp.json())
+
+
+@settings_app.command("set")
+def settings_set(
+    patch_json: str = typer.Argument(
+        ...,
+        help='JSON patch, e.g. \'{"harness":"mock","limits":{"daily_budget_usd":80}}\'',
+    ),
+) -> None:
+    """Deep-merge a JSON patch into runtime settings (no redeploy)."""
+    payload = json.loads(patch_json)
+    with httpx.Client(timeout=10.0) as client:
+        resp = client.put(f"{_base_url()}/control/settings", json=payload)
+        resp.raise_for_status()
+        _echo(resp.json())
+
+
 @prd_app.command("index")
 def prd_index(file: Path = typer.Argument(..., exists=True, readable=True)) -> None:
     """Index a markdown PRD into products + requirements."""

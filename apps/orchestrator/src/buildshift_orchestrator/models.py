@@ -235,3 +235,15 @@ class PathLock(Base):
     )
     held_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class RuntimeSettings(Base):
+    """Operator control-plane knobs (models, budgets, harness, …). Env is secrets/bootstrap only."""
+
+    __tablename__ = "runtime_settings"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True, default="default")
+    value: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

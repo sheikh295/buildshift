@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from pathlib import Path
 from typing import Any
 
 import yaml
@@ -27,7 +26,8 @@ DEFAULT_ROUTER: dict[str, Any] = {
 
 
 @lru_cache
-def load_router() -> dict[str, Any]:
+def load_router_yaml() -> dict[str, Any]:
+    """Load router.yaml once (seed / fallback). Day-to-day overrides live in runtime_settings."""
     settings = get_settings()
     path = settings.router_config_path
     if path.exists():
@@ -36,7 +36,25 @@ def load_router() -> dict[str, Any]:
         merged["roles"] = {**DEFAULT_ROUTER["roles"], **(data.get("roles") or {})}
         merged["limits"] = {**DEFAULT_ROUTER["limits"], **(data.get("limits") or {})}
         return merged
-    return DEFAULT_ROUTER
+    return copy_default()
+
+
+def copy_default() -> dict[str, Any]:
+    return {
+        "roles": {k: dict(v) for k, v in DEFAULT_ROUTER["roles"].items()},
+        "limits": dict(DEFAULT_ROUTER["limits"]),
+    }
+
+
+def load_router() -> dict[str, Any]:
+    """Merged view: defaults → yaml → runtime_settings cache (control plane wins)."""
+    from buildshift_orchestrator.runtime_settings import get_cached_runtime
+
+    yaml_router = load_router_yaml()
+    runtime = get_cached_runtime()
+    roles = {**yaml_router.get("roles", {}), **(runtime.get("roles") or {})}
+    limits = {**yaml_router.get("limits", {}), **(runtime.get("limits") or {})}
+    return {"roles": roles, "limits": limits}
 
 
 def role_model(role: str) -> str:

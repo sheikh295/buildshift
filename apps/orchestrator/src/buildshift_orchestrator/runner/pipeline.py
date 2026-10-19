@@ -4,6 +4,7 @@ import logging
 import shutil
 import subprocess
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -18,13 +19,19 @@ from buildshift_orchestrator.models import Run, Task, TaskState
 from buildshift_orchestrator.router_config import role_model, role_tier
 from buildshift_orchestrator.runner import gitops
 from buildshift_orchestrator.runner.docker_run import run_worker
-from buildshift_orchestrator.runner.github import open_pull_request, parse_github_repo
+from buildshift_orchestrator.runner.github import (
+    merge_pull_request,
+    open_pull_request,
+    parse_github_repo,
+)
 from buildshift_orchestrator.runner.locks import acquire_locks, release_locks
 
 log = logging.getLogger(__name__)
 
 # Single-orchestrator merge queue (avoids pg advisory locks across pooled connections)
 _MERGE_LOCK = threading.Lock()
+_FIXTURE_LOCK = threading.Lock()
+PATH_LOCK_BACKOFF_SEC = 3.0
 
 STAGE_ORDER = ("test_author", "implementer", "reviewer")
 STAGE_STATE = {
@@ -34,34 +41,63 @@ STAGE_STATE = {
 }
 
 
+def _fixture_needs_reseed(bare: Path) -> bool:
+    if not bare.exists():
+        return True
+    # Prefer explicit main tip — bare repos may lack a symbolic HEAD
+    probe = subprocess.run(
+        ["git", "--git-dir", str(bare), "cat-file", "-e", "refs/heads/main:tests/test_smoke.py"],
+        capture_output=True,
+        check=False,
+    )
+    return probe.returncode != 0
+
+
 def _fixture_remote(settings: Settings) -> Path:
     remotes = settings.data_dir / "remotes"
     remotes.mkdir(parents=True, exist_ok=True)
     bare = remotes / "demo-app.git"
     seed = settings.repo_root / "fixtures" / "demo-app"
-    if bare.exists():
+    if not _fixture_needs_reseed(bare):
         return bare
 
-    bare.mkdir(parents=True)
-    subprocess.run(["git", "init", "--bare", str(bare)], check=True, capture_output=True)
-    tmp = settings.data_dir / "tmp-seed-demo"
-    if tmp.exists():
+    with _FIXTURE_LOCK:
+        # Another worker may have finished reseeding while we waited
+        if not _fixture_needs_reseed(bare):
+            return bare
+
+        if bare.exists():
+            shutil.rmtree(bare)
+        mirror = settings.data_dir / "repos" / "demo-app"
+        if mirror.exists():
+            shutil.rmtree(mirror)
+
+        bare.mkdir(parents=True)
+        subprocess.run(["git", "init", "--bare", str(bare)], check=True, capture_output=True)
+        # Ensure clone --branch main works
+        subprocess.run(
+            ["git", "--git-dir", str(bare), "symbolic-ref", "HEAD", "refs/heads/main"],
+            check=True,
+            capture_output=True,
+        )
+        tmp = settings.data_dir / "tmp-seed-demo"
+        if tmp.exists():
+            shutil.rmtree(tmp)
+        shutil.copytree(seed, tmp, ignore=shutil.ignore_patterns(".git"))
+        subprocess.run(["git", "init", "-b", "main"], cwd=tmp, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "buildshift@local"], cwd=tmp, check=True)
+        subprocess.run(["git", "config", "user.name", "Buildshift"], cwd=tmp, check=True)
+        subprocess.run(["git", "add", "."], cwd=tmp, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "chore: seed demo-app fixture"],
+            cwd=tmp,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(["git", "remote", "add", "origin", str(bare)], cwd=tmp, check=True)
+        subprocess.run(["git", "push", "-u", "origin", "main"], cwd=tmp, check=True, capture_output=True)
         shutil.rmtree(tmp)
-    shutil.copytree(seed, tmp, ignore=shutil.ignore_patterns(".git"))
-    subprocess.run(["git", "init", "-b", "main"], cwd=tmp, check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.email", "buildshift@local"], cwd=tmp, check=True)
-    subprocess.run(["git", "config", "user.name", "Buildshift"], cwd=tmp, check=True)
-    subprocess.run(["git", "add", "."], cwd=tmp, check=True, capture_output=True)
-    subprocess.run(
-        ["git", "commit", "-m", "chore: seed demo-app fixture"],
-        cwd=tmp,
-        check=True,
-        capture_output=True,
-    )
-    subprocess.run(["git", "remote", "add", "origin", str(bare)], cwd=tmp, check=True)
-    subprocess.run(["git", "push", "-u", "origin", "main"], cwd=tmp, check=True, capture_output=True)
-    shutil.rmtree(tmp)
-    return bare
+        return bare
 
 
 def resolve_clone_url(settings: Settings) -> str:
@@ -91,9 +127,13 @@ def build_prompt(task: Task, role: str) -> str:
     )
 
 
-def _parse_review_verdict(worktree: Path) -> str:
-    review = worktree / ".buildshift" / "review.md"
-    if not review.exists():
+def _parse_review_verdict(worktree: Path, task_id: uuid.UUID | None = None) -> str:
+    candidates = []
+    if task_id is not None:
+        candidates.append(worktree / ".buildshift" / "tasks" / str(task_id) / "review.md")
+    candidates.append(worktree / ".buildshift" / "review.md")
+    review = next((p for p in candidates if p.exists()), None)
+    if review is None:
         return "APPROVE"
     text_body = review.read_text()
     for line in text_body.splitlines():
@@ -134,47 +174,108 @@ def _integrate(
     task: Task,
     *,
     clone_url: str,
+    repo_path: Path,
     worktree: Path,
     branch: str,
     repo_name: str,
 ) -> None:
-    """Single-flight merge queue v0: push + PR."""
+    """Single-flight merge queue: rebase → local CI → land on base → merged."""
     with _MERGE_LOCK:
         task.state = TaskState.integrating.value
+        task.updated_at = datetime.now(timezone.utc)
         db.commit()
 
+        base = settings.proving_repo_branch
         token = settings.github_token
-        gitops.push_branch(worktree, branch, token=token)
-        repo_full = parse_github_repo(clone_url) if token else None
-        if token and repo_full:
-            task.pr_url = open_pull_request(
-                api_url=settings.github_api_url,
-                token=token,
-                repo_full_name=repo_full,
-                title=f"[buildshift] {task.title}",
-                head=branch,
-                base=settings.proving_repo_branch,
-                body=build_prompt(task, "implementer"),
-            )
-        else:
-            tip = gitops.current_head(worktree)
-            task.pr_url = f"local://{repo_name}/{branch}@{tip[:12]}"
+        try:
+            gitops.rebase_onto_base(worktree, base)
+            gitops.run_local_ci(worktree)
+            gitops.push_branch(worktree, branch, token=token, force=True)
 
-        release_locks(db, task.id)
-        task.state = TaskState.merged.value
-        task.finished_at = datetime.now(timezone.utc)
-        task.error = None
-        emit(
-            db,
-            kind="task.completed",
-            task_id=task.id,
-            role=task.role,
-            tier=task.tier,
-            status="done",
-            summary=f"Completed via {task.pr_url}",
-            payload={"branch": branch, "pr_url": task.pr_url},
-        )
-        db.commit()
+            repo_full = parse_github_repo(clone_url) if token else None
+            if token and repo_full:
+                task.pr_url = open_pull_request(
+                    api_url=settings.github_api_url,
+                    token=token,
+                    repo_full_name=repo_full,
+                    title=f"[buildshift] {task.title}",
+                    head=branch,
+                    base=base,
+                    body=build_prompt(task, "implementer"),
+                )
+                merge_pull_request(
+                    api_url=settings.github_api_url,
+                    token=token,
+                    repo_full_name=repo_full,
+                    pr_url=task.pr_url,
+                    commit_title=f"[buildshift] {task.title}",
+                )
+                tip = gitops.current_head(worktree)
+                # Refresh local mirror so subsequent checkouts see the merge
+                gitops.ensure_repo(clone_url, repo_path, base)
+            else:
+                tip = gitops.land_on_base_local(
+                    checkout=worktree,
+                    mirror=repo_path,
+                    branch=branch,
+                    base_branch=base,
+                )
+                # Mirror already at tip; refresh from bare for consistency
+                gitops.ensure_repo(clone_url, repo_path, base)
+                task.pr_url = f"local://{repo_name}/{base}@{tip[:12]}"
+
+            release_locks(db, task.id)
+            task.state = TaskState.merged.value
+            task.finished_at = datetime.now(timezone.utc)
+            task.error = None
+            emit(
+                db,
+                kind="task.completed",
+                task_id=task.id,
+                role=task.role,
+                tier=task.tier,
+                status="done",
+                summary=f"Landed on {base} via {task.pr_url}",
+                payload={"branch": branch, "pr_url": task.pr_url, "base_tip": tip[:12]},
+            )
+            db.commit()
+        except gitops.RebaseConflict as exc:
+            log.warning("task %s rebase conflict: %s", task.id, exc)
+            task.error = str(exc)[:4000]
+            # Do not bump attempts — reviewer stage already counted; retry share that budget
+            release_locks(db, task.id)
+            if task.attempts >= task.max_attempts:
+                task.state = TaskState.parked.value
+                summary = f"Parked after rebase conflicts: {exc}"
+            else:
+                task.state = TaskState.ready.value
+                summary = f"Rebase conflict; will retry (attempt {task.attempts})"
+            task.updated_at = datetime.now(timezone.utc)
+            emit(
+                db,
+                kind="task.rebase_conflict",
+                task_id=task.id,
+                status=task.state,
+                summary=summary[:2000],
+            )
+            db.commit()
+        except Exception as exc:
+            log.exception("task %s integrate failed", task.id)
+            task.error = str(exc)[:4000]
+            release_locks(db, task.id)
+            if task.attempts >= task.max_attempts:
+                task.state = TaskState.parked.value
+            else:
+                task.state = TaskState.ready.value
+            task.updated_at = datetime.now(timezone.utc)
+            emit(
+                db,
+                kind="task.integrate_failed",
+                task_id=task.id,
+                status=task.state,
+                summary=str(exc)[:2000],
+            )
+            db.commit()
 
 
 def _run_stage(db: Session, settings: Settings, task: Task, role: str) -> None:
@@ -207,27 +308,52 @@ def _run_stage(db: Session, settings: Settings, task: Task, role: str) -> None:
     )
     db.commit()
 
-    if role == "implementer":
-        if not acquire_locks(db, task.id, task.owned_paths or []):
-            task.state = TaskState.ready.value
-            task.attempts = max(0, task.attempts - 1)
-            run.status = "skipped"
-            run.ended_at = datetime.now(timezone.utc)
-            run.logs = "path locks busy; will retry"
-            emit(
-                db,
-                kind="task.path_lock_wait",
-                task_id=task.id,
-                status="ready",
-                summary="Owned paths locked by another task",
-            )
-            db.commit()
-            return
+    # Hold path locks for the full multi-role pipeline (acquire on first stage)
+    if not acquire_locks(db, task.id, task.owned_paths or []):
+        task.state = TaskState.ready.value
+        task.attempts = max(0, task.attempts - 1)
+        run.status = "skipped"
+        run.ended_at = datetime.now(timezone.utc)
+        run.logs = "path locks busy; will retry"
+        emit(
+            db,
+            kind="task.path_lock_wait",
+            task_id=task.id,
+            status="ready",
+            summary="Owned paths locked by another task",
+        )
+        db.commit()
+        time.sleep(PATH_LOCK_BACKOFF_SEC)
+        return
 
-    clone_url, _repo_path, worktree, branch, repo_name = _prepare_checkout(settings, task)
+    clone_url, repo_path, worktree, branch, repo_name = _prepare_checkout(settings, task)
     task.branch = branch
     task.worktree_path = str(worktree)
     db.commit()
+
+    # Integrate-only retry: reviewer already approved; skip the worker
+    if role == "reviewer" and (task.review_verdict or "").upper() == "APPROVE":
+        run.status = "skipped"
+        run.logs = "review already APPROVE; retry integrate only"
+        run.ended_at = datetime.now(timezone.utc)
+        db.commit()
+        try:
+            _integrate(
+                db,
+                settings,
+                task,
+                clone_url=clone_url,
+                repo_path=repo_path,
+                worktree=worktree,
+                branch=branch,
+                repo_name=str(repo_name),
+            )
+        finally:
+            try:
+                gitops.remove_checkout(worktree)
+            except Exception:
+                log.warning("failed to clean checkout %s", worktree, exc_info=True)
+        return
 
     try:
         exit_code, logs = run_worker(
@@ -236,6 +362,7 @@ def _run_stage(db: Session, settings: Settings, task: Task, role: str) -> None:
             worktree=worktree,
             prompt=build_prompt(task, role),
             role=role,
+            owned_paths=list(task.owned_paths or []),
         )
         run.logs = logs[-100_000:]
         if exit_code != 0:
@@ -257,7 +384,7 @@ def _run_stage(db: Session, settings: Settings, task: Task, role: str) -> None:
         run.ended_at = datetime.now(timezone.utc)
 
         if role == "reviewer":
-            verdict = _parse_review_verdict(worktree)
+            verdict = _parse_review_verdict(worktree, task.id)
             task.review_verdict = verdict
             if verdict == "REQUEST_CHANGES":
                 if task.attempts >= task.max_attempts:
@@ -284,6 +411,7 @@ def _run_stage(db: Session, settings: Settings, task: Task, role: str) -> None:
                 settings,
                 task,
                 clone_url=clone_url,
+                repo_path=repo_path,
                 worktree=worktree,
                 branch=branch,
                 repo_name=str(repo_name),
@@ -313,6 +441,7 @@ def _run_stage(db: Session, settings: Settings, task: Task, role: str) -> None:
                 settings,
                 task,
                 clone_url=clone_url,
+                repo_path=repo_path,
                 worktree=worktree,
                 branch=branch,
                 repo_name=str(repo_name),
@@ -376,13 +505,14 @@ def run_task_legacy(db: Session, settings: Settings, task: Task) -> None:
     )
     db.commit()
 
-    clone_url, _repo, worktree, branch, repo_name = _prepare_checkout(settings, task)
+    clone_url, repo_path, worktree, branch, repo_name = _prepare_checkout(settings, task)
     task.branch = branch
     task.worktree_path = str(worktree)
     db.commit()
 
     try:
         if not acquire_locks(db, task.id, task.owned_paths or []):
+            time.sleep(PATH_LOCK_BACKOFF_SEC)
             raise RuntimeError("path locks busy")
 
         exit_code, logs = run_worker(
@@ -391,6 +521,7 @@ def run_task_legacy(db: Session, settings: Settings, task: Task) -> None:
             worktree=worktree,
             prompt=build_prompt(task, "implementer"),
             role="implementer",
+            owned_paths=list(task.owned_paths or []),
         )
         run.logs = logs[-100_000:]
         if exit_code != 0:
@@ -409,6 +540,7 @@ def run_task_legacy(db: Session, settings: Settings, task: Task) -> None:
             settings,
             task,
             clone_url=clone_url,
+            repo_path=repo_path,
             worktree=worktree,
             branch=branch,
             repo_name=str(repo_name),

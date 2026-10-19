@@ -8,19 +8,20 @@ License: [Apache-2.0](LICENSE)
 
 ## Status
 
-Week 1 + Week 2 CLI pipeline: Compose stack, orchestrator, PRD indexing, daily plan approval gate, multi-role workers (test-author → implementer → reviewer), path locks, thin merge queue. Dashboard is still Week 3.
+Week 1 + Week 2 CLI pipeline plus Week 2.5 merge queue: Compose stack, orchestrator, PRD indexing, daily plan approval gate, multi-role workers (test-author → implementer → reviewer), path locks, and a merge queue that **lands commits on the proving base**. Dashboard is still Week 3.
 
 ## Quick start (laptop or VPS)
 
 ```bash
 cp .env.example .env
 make up
-make smoke          # Week 1 single task
-make smoke-week2    # Week 2 PRD → plan → multi-role
+make smoke           # Week 1 single task
+make smoke-week2     # Week 2 PRD → plan → multi-role
+make smoke-week25    # Week 2.5: 12 tasks land on base
 make down
 ```
 
-Defaults use `HARNESS=mock` and the in-repo [`fixtures/demo-app`](fixtures/demo-app) / [`fixtures/sample-prd.md`](fixtures/sample-prd.md) so you can exercise the pipeline with **zero LLM spend**.
+Defaults use `HARNESS=mock` and the in-repo [`fixtures/demo-app`](fixtures/demo-app) / [`fixtures/sample-prd.md`](fixtures/sample-prd.md) / [`fixtures/sample-prd-12.md`](fixtures/sample-prd-12.md) so you can exercise the pipeline with **zero LLM spend**.
 
 ## Monorepo layout
 

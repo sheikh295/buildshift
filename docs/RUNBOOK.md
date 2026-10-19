@@ -18,6 +18,7 @@ cp .env.example .env
 make up    # exports HOST_DATA_DIR for docker-from-docker mounts
 make smoke
 make smoke-week2
+make smoke-week25
 ```
 
 `make` sets `HOST_DATA_DIR` to `$(CURDIR)/data` so the orchestrator can ask the host Docker daemon to mount checkouts correctly (required on Docker Desktop and any docker-from-docker setup).
@@ -33,6 +34,7 @@ make smoke-week2
 | `make health` | `GET /health` |
 | `make smoke` | Week 1: one mock task end-to-end |
 | `make smoke-week2` | Week 2: PRD → plan approve → multi-role tasks |
+| `make smoke-week25` | Week 2.5: 12 tasks rebase → CI → land on base |
 | `make kill ARGS=true` | Global kill switch on |
 
 ### Week 2 CLI flow
@@ -49,6 +51,16 @@ curl -s -X POST http://127.0.0.1:8080/plans/<plan_id>/approve
 ```
 
 Role → model routing lives in `apps/orchestrator/config/router.yaml` (aliases must exist in `services/litellm/config.yaml`).
+
+### Week 2.5 merge queue
+
+After reviewer approval the orchestrator, under a single-flight lock:
+
+1. Rebases the task branch onto the proving base
+2. Runs local CI (`python -m unittest discover -s tests`)
+3. Lands on base (local bare fast-forward, or GitHub PR + merge when tokenized)
+
+`merged` means the change is on the proving base tip — not merely that a PR was opened. `make smoke-week25` indexes [`fixtures/sample-prd-12.md`](../fixtures/sample-prd-12.md), approves 12 tickets, and asserts each owned path exists on `main`.
 
 Enqueue an ad-hoc Week 1 task:
 

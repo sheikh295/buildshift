@@ -33,23 +33,51 @@ commit_if_needed() {
   git commit -m "$msg"
 }
 
+write_owned_paths() {
+  # OWNED_PATHS is comma-separated; skip .buildshift entries (metadata only)
+  local IFS=','
+  local wrote=0
+  for raw in ${OWNED_PATHS:-}; do
+    local p
+    p="$(echo "$raw" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    [[ -z "$p" ]] && continue
+    case "$p" in
+      .buildshift|.buildshift/*) continue ;;
+    esac
+    mkdir -p "$(dirname "$p")"
+    {
+      echo "# Mock implementation"
+      echo "task_id: $TASK_ID"
+      echo "owned_path: $p"
+      echo "generated_at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    } > "$p"
+    wrote=1
+  done
+  return $((1 - wrote))
+}
+
 mock_by_role() {
-  mkdir -p .buildshift tests
+  mkdir -p .buildshift/tasks/"$TASK_ID" tests
+  META=".buildshift/tasks/${TASK_ID}"
   case "$ROLE" in
     test_author)
+      # Use unittest so discover-based local CI keeps passing
       OUT="tests/test_task_${TASK_ID//-/_}.py"
       {
         echo '"""Auto-generated acceptance test stub (mock harness)."""'
+        echo "import unittest"
         echo
-        echo "def test_acceptance_placeholder():"
-        echo "    assert True  # TODO: replace with real criteria checks"
+        echo
+        echo "class AcceptanceStub(unittest.TestCase):"
+        echo "    def test_acceptance_placeholder(self):"
+        echo "        self.assertTrue(True)  # TODO: real criteria"
       } > "$OUT"
-      echo "# tests authored" > .buildshift/tests.md
-      cat "$PROMPT_FILE" >> .buildshift/tests.md
+      echo "# tests authored" > "$META/tests.md"
+      cat "$PROMPT_FILE" >> "$META/tests.md"
       commit_if_needed "buildshift(test_author): tests for ${TASK_ID}"
       ;;
     implementer)
-      OUT=".buildshift/impl.md"
+      OUT="$META/impl.md"
       {
         echo "# Implementation (mock)"
         echo
@@ -58,10 +86,17 @@ mock_by_role() {
         echo
         cat "$PROMPT_FILE"
       } > "$OUT"
+      # Land real owned-path artifacts on base for proving runs
+      write_owned_paths || true
       commit_if_needed "buildshift(implementer): apply ${TASK_ID}"
       ;;
     reviewer)
-      OUT=".buildshift/review.md"
+      OUT="$META/review.md"
+      # Integrate retries re-enter reviewer; keep prior APPROVE without a no-op commit
+      if [[ -f "$OUT" ]] && grep -qi 'verdict:[[:space:]]*APPROVE' "$OUT"; then
+        echo "review already APPROVE; skipping recommit"
+        exit 0
+      fi
       {
         echo "# Review (mock)"
         echo
@@ -73,7 +108,7 @@ mock_by_role() {
       commit_if_needed "buildshift(reviewer): review ${TASK_ID}"
       ;;
     *)
-      OUT=".buildshift/mock-result.md"
+      OUT="$META/mock-result.md"
       {
         echo "# Mock worker result"
         echo "role: $ROLE"

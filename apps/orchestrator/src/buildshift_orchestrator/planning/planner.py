@@ -20,6 +20,7 @@ from buildshift_orchestrator.models import (
     TaskState,
 )
 from buildshift_orchestrator.router_config import role_tier, router_limits
+from buildshift_orchestrator.runner.locks import owned_paths_overlap
 
 
 HUMAN_KEYWORDS = (
@@ -150,7 +151,8 @@ def propose_plan(
                 {
                     "title": f"{product.title}: {req.req_key}",
                     "acceptance_criteria": req.text,
-                    "owned_paths": [path, ".buildshift/"],
+                    # Keep owned paths disjoint; .buildshift metadata is task-scoped in the mock harness
+                    "owned_paths": [path],
                     "difficulty": "normal",
                     "estimated_spend_usd": float(settings.task_budget_usd) / 2,
                     "req_ids": [str(req.id)],
@@ -213,10 +215,14 @@ def approve_plan(db: Session, settings: Settings, plan_id: uuid.UUID) -> dict:
         raise ValueError("plan already approved")
 
     limits = router_limits()
-    max_attempts = int(limits.get("max_attempts_per_tier") or settings.max_attempts_per_tier)
+    # Plan tasks run 3 stages + possible integrate retries; give them headroom
+    max_attempts = max(
+        int(limits.get("max_attempts_per_tier") or settings.max_attempts_per_tier),
+        4,
+    )
     budget = Decimal(str(limits.get("task_budget_usd") or settings.task_budget_usd))
 
-    created_tasks: list[str] = []
+    created: list[Task] = []
     for ticket in plan.tickets:
         backlog_id = ticket.get("backlog_id")
         if backlog_id:
@@ -261,10 +267,21 @@ def approve_plan(db: Session, settings: Settings, plan_id: uuid.UUID) -> dict:
             product_id=plan.product_id,
             plan_id=plan.id,
             req_ids=ticket.get("req_ids") or [],
+            deps=[],
         )
         db.add(task)
-        created_tasks.append(str(task.id))
+        created.append(task)
 
+    # Wire deps: later tickets wait on earlier ones whose owned paths overlap
+    db.flush()
+    for i, task in enumerate(created):
+        deps: list[str] = []
+        for prev in created[:i]:
+            if owned_paths_overlap(task.owned_paths or [], prev.owned_paths or []):
+                deps.append(str(prev.id))
+        task.deps = deps
+
+    created_tasks = [str(t.id) for t in created]
     plan.status = "approved"
     plan.approved_at = datetime.now(timezone.utc)
     emit(

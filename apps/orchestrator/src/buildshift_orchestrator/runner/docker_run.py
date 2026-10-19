@@ -25,6 +25,7 @@ def run_worker(
     worktree: Path,
     prompt: str,
     role: str = "implementer",
+    owned_paths: list[str] | None = None,
 ) -> tuple[int, str]:
     """Run the worker container against a mounted task checkout. Returns (exit_code, logs)."""
     client = get_client(settings)
@@ -37,6 +38,7 @@ def run_worker(
         "HARNESS": settings.harness,
         "ROLE": role,
         "TASK_ID": task_id,
+        "OWNED_PATHS": ",".join(owned_paths or []),
         "ANTHROPIC_BASE_URL": f"{settings.litellm_url.rstrip('/')}",
         "ANTHROPIC_API_KEY": settings.litellm_master_key,
         "ANTHROPIC_MODEL": model,

@@ -1,4 +1,4 @@
-.PHONY: help up down down-wipe build logs ps health task kill smoke smoke-week2 migrate shell
+.PHONY: help up down down-wipe build logs ps health task kill smoke smoke-week2 smoke-week25 migrate shell
 
 COMPOSE ?= docker compose
 BUILDSHIFT_URL ?= http://127.0.0.1:8080
@@ -9,14 +9,15 @@ export HOST_DATA_DIR
 help:
 	@echo "Buildshift — portable Compose stack"
 	@echo ""
-	@echo "  make up          Build images and start stack"
-	@echo "  make down        Stop stack (keep volumes)"
-	@echo "  make down-wipe   Stop and remove volumes"
-	@echo "  make logs        Follow orchestrator logs"
-	@echo "  make ps          Show compose services"
-	@echo "  make health      Hit /health"
-	@echo "  make smoke       Week 1: enqueue mock task and wait"
-	@echo "  make smoke-week2 Week 2: index PRD → approve plan → multi-role merge"
+	@echo "  make up           Build images and start stack"
+	@echo "  make down         Stop stack (keep volumes)"
+	@echo "  make down-wipe    Stop and remove volumes"
+	@echo "  make logs         Follow orchestrator logs"
+	@echo "  make ps           Show compose services"
+	@echo "  make health       Hit /health"
+	@echo "  make smoke        Week 1: enqueue mock task and wait"
+	@echo "  make smoke-week2  Week 2: index PRD → approve plan → multi-role merge"
+	@echo "  make smoke-week25 Week 2.5: 12 tasks land on proving base"
 	@echo "  make task ARGS='create \"title\" -c \"...\"'"
 	@echo "  make kill ARGS='true|false'"
 
@@ -59,6 +60,9 @@ smoke:
 
 smoke-week2:
 	./scripts/smoke-week2.sh
+
+smoke-week25:
+	./scripts/smoke-week25.sh
 
 shell:
 	$(COMPOSE) exec orchestrator bash

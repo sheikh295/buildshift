@@ -1,8 +1,15 @@
-"""Minimal demo module for Buildshift smoke tests."""
+"""Compat shim for older smokes — prefer demo_app.core."""
 
+from __future__ import annotations
 
-def greet(name: str = "world") -> str:
-    return f"hello, {name}"
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
+
+from demo_app.core import greet  # noqa: E402
+
+__all__ = ["greet"]
 
 
 if __name__ == "__main__":

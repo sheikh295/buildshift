@@ -20,6 +20,13 @@ INFLIGHT_STATES = {
     TaskState.integrating.value,
 }
 
+TERMINAL_STATES = {
+    TaskState.merged.value,
+    TaskState.parked.value,
+    TaskState.failed.value,
+    TaskState.stopped.value,
+}
+
 # Mid-flight crash recovery (not used on cold start — see force=True).
 ORPHAN_AGE = timedelta(minutes=30)
 
@@ -79,7 +86,10 @@ def recover_orphaned_inflight(db: Session, *, force: bool = False) -> int:
 
 
 def _purge_stale(db: Session) -> None:
-    """Drop locks whose tasks are no longer inflight, expired, or long-orphaned."""
+    """Drop locks for terminal/missing tasks, expired holds, or long-orphaned inflight.
+
+    Ready tasks may still hold locks between multi-role stages — do not purge those.
+    """
     now = datetime.now(timezone.utc)
     locks = list(db.scalars(select(PathLock)))
     for lock in locks:
@@ -91,12 +101,30 @@ def _purge_stale(db: Session) -> None:
             db.delete(lock)
             continue
         task = db.get(Task, lock.task_id)
-        if task is None or task.state not in INFLIGHT_STATES:
+        if task is None or task.state in TERMINAL_STATES:
             db.delete(lock)
             continue
-        if _is_orphan(task, now, max_age=ORPHAN_AGE):
+        if task.state in INFLIGHT_STATES and _is_orphan(task, now, max_age=ORPHAN_AGE):
             db.delete(lock)
     db.flush()
+
+
+def paths_overlap(a: str, b: str) -> bool:
+    """True when paths are equal or one is a prefix of the other."""
+    na, nb = _normalize(a), _normalize(b)
+    if not na or not nb:
+        return False
+    return na == nb or na.startswith(nb + "/") or nb.startswith(na + "/")
+
+
+def owned_paths_overlap(left: list, right: list) -> bool:
+    lp = lockable_paths(left)
+    rp = lockable_paths(right)
+    for a in lp:
+        for b in rp:
+            if paths_overlap(a, b):
+                return True
+    return False
 
 
 def can_acquire(db: Session, task_id: uuid.UUID, owned_paths: list) -> bool:
@@ -104,10 +132,13 @@ def can_acquire(db: Session, task_id: uuid.UUID, owned_paths: list) -> bool:
     paths = lockable_paths(owned_paths)
     if not paths:
         return True
+    held = list(db.scalars(select(PathLock)))
     for path in paths:
-        existing = db.scalar(select(PathLock).where(PathLock.path_glob == path))
-        if existing and existing.task_id != task_id:
-            return False
+        for existing in held:
+            if existing.task_id == task_id:
+                continue
+            if paths_overlap(path, existing.path_glob):
+                return False
     return True
 
 
@@ -120,21 +151,26 @@ def acquire_locks(db: Session, task_id: uuid.UUID, owned_paths: list, hours: int
     until = datetime.now(timezone.utc) + timedelta(hours=hours)
     try:
         with db.begin_nested():
+            held = list(db.scalars(select(PathLock)))
             for path in paths:
-                existing = db.scalar(select(PathLock).where(PathLock.path_glob == path))
+                existing = next((h for h in held if h.path_glob == path), None)
                 if existing and existing.task_id == task_id:
                     existing.held_until = until
                     continue
                 if existing:
                     raise IntegrityError("path taken", params=None, orig=None)
-                db.add(
-                    PathLock(
-                        id=uuid.uuid4(),
-                        path_glob=path,
-                        task_id=task_id,
-                        held_until=until,
-                    )
+                # Also reject prefix conflicts that slipped in
+                for h in held:
+                    if h.task_id != task_id and paths_overlap(path, h.path_glob):
+                        raise IntegrityError("path overlap", params=None, orig=None)
+                lock = PathLock(
+                    id=uuid.uuid4(),
+                    path_glob=path,
+                    task_id=task_id,
+                    held_until=until,
                 )
+                db.add(lock)
+                held.append(lock)
             db.flush()
         return True
     except IntegrityError:

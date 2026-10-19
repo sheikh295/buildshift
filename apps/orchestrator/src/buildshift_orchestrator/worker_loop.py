@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 
@@ -31,29 +32,44 @@ def count_inflight(db: Session) -> int:
     return db.scalar(select(func.count()).select_from(Task).where(Task.state.in_(INFLIGHT))) or 0
 
 
+def _deps_satisfied(db: Session, task: Task) -> bool:
+    for dep_id in task.deps or []:
+        try:
+            dep_uuid = uuid.UUID(str(dep_id))
+        except ValueError:
+            return False
+        dep = db.get(Task, dep_uuid)
+        if dep is None or dep.state != TaskState.merged.value:
+            return False
+    return True
+
+
 def claim_next_task(db: Session) -> Task | None:
-    row = db.execute(
+    """Claim the oldest ready task whose deps are all merged."""
+    rows = db.execute(
         text(
             """
             SELECT id FROM tasks
             WHERE state = :state
             ORDER BY created_at ASC
             FOR UPDATE SKIP LOCKED
-            LIMIT 1
+            LIMIT 32
             """
         ),
         {"state": TaskState.ready.value},
-    ).first()
-    if not row:
-        return None
-    task = db.get(Task, row[0])
-    if task is None:
-        return None
-    stage = task.stage or task.role or "implementer"
-    task.state = STAGE_STATE.get(stage, TaskState.coding.value)
-    db.commit()
-    db.refresh(task)
-    return task
+    ).fetchall()
+    for row in rows:
+        task = db.get(Task, row[0])
+        if task is None:
+            continue
+        if not _deps_satisfied(db, task):
+            continue
+        stage = task.stage or task.role or "implementer"
+        task.state = STAGE_STATE.get(stage, TaskState.coding.value)
+        db.commit()
+        db.refresh(task)
+        return task
+    return None
 
 
 def _execute_task(settings: Settings, task_id) -> None:

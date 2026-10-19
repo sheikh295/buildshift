@@ -40,12 +40,15 @@ a {
   position: absolute;
   inset: 0;
   z-index: 0;
+  background: #121820;
 }
 
 .office-canvas canvas {
   display: block;
   width: 100% !important;
   height: 100% !important;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
 }
 
 .hud-bar {
@@ -58,9 +61,8 @@ a {
   gap: 0.5rem;
   align-items: center;
   padding: 0.65rem 1rem;
-  background: linear-gradient(180deg, rgba(14, 21, 32, 0.92), rgba(14, 21, 32, 0.55));
+  background: rgba(14, 21, 32, 0.94);
   border-bottom: 1px solid var(--line);
-  backdrop-filter: blur(6px);
 }
 
 .hud-bar .brand {
@@ -255,6 +257,15 @@ a {
 .inspector h3 {
   margin: 0 1rem;
   font-size: 1rem;
+}
+
+.inspector h3.sub {
+  margin-top: 0.75rem;
+  font-size: 0.8rem;
+  color: var(--accent);
+  font-family: var(--font-display);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .inspector dl {

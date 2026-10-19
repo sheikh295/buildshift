@@ -1,21 +1,26 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import type { EventRow, OfficeMap, Task } from "@/lib/types";
+import type { EventRow, OfficeMap, Selection, Task } from "@/lib/types";
 
 type Props = {
   map: OfficeMap;
   tasks: Task[];
   lastEvent: EventRow | null;
-  onSelectTask: (task: Task | null) => void;
+  onSelect: (sel: Selection) => void;
 };
 
-export function OfficeCanvas({ map, tasks, lastEvent, onSelectTask }: Props) {
+type SceneApi = {
+  syncTasks: (t: Task[]) => void;
+  flashEvent: (k: string, id?: string | null) => void;
+};
+
+export function OfficeCanvas({ map, tasks, lastEvent, onSelect }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const gameRef = useRef<Phaser.Game | null>(null);
-  const sceneRef = useRef<{ syncTasks: (t: Task[]) => void; flashEvent: (k: string, id?: string | null) => void } | null>(null);
-  const onSelectRef = useRef(onSelectTask);
-  onSelectRef.current = onSelectTask;
+  const sceneRef = useRef<SceneApi | null>(null);
+  const onSelectRef = useRef(onSelect);
+  onSelectRef.current = onSelect;
 
   useEffect(() => {
     let destroyed = false;
@@ -26,21 +31,27 @@ export function OfficeCanvas({ map, tasks, lastEvent, onSelectTask }: Props) {
 
       const scene = new OfficeScene();
       const game = new Phaser.Game({
-        type: Phaser.AUTO,
+        type: Phaser.WEBGL,
         parent: hostRef.current,
         width: map.width,
         height: map.height,
-        backgroundColor: "#1a2332",
+        backgroundColor: "#121820",
         scene: [scene],
+        render: {
+          pixelArt: true,
+          antialias: false,
+          roundPixels: true,
+        },
         scale: {
           mode: Phaser.Scale.FIT,
           autoCenter: Phaser.Scale.CENTER_BOTH,
         },
+        audio: { noAudio: true },
       });
       game.scene.start("OfficeScene", {
         map,
         callbacks: {
-          onSelectTask: (t: Task | null) => onSelectRef.current(t),
+          onSelect: (sel: Selection) => onSelectRef.current(sel),
         },
       });
       gameRef.current = game;

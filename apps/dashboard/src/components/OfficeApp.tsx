@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { orch } from "@/lib/api";
-import type { EventRow, OfficeMap, Task } from "@/lib/types";
+import type { EventRow, OfficeMap, Selection, Task } from "@/lib/types";
 import { OfficeCanvas } from "./OfficeCanvas";
 import { Hud } from "./Hud";
 
@@ -10,7 +10,7 @@ type Props = { map: OfficeMap };
 
 export function OfficeApp({ map }: Props) {
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [selected, setSelected] = useState<Task | null>(null);
+  const [selection, setSelection] = useState<Selection>(null);
   const [lastEvent, setLastEvent] = useState<EventRow | null>(null);
   const [error, setError] = useState("");
 
@@ -26,7 +26,7 @@ export function OfficeApp({ map }: Props) {
 
   useEffect(() => {
     refresh();
-    const t = setInterval(refresh, 4000);
+    const t = setInterval(refresh, 3500);
     return () => clearInterval(t);
   }, [refresh]);
 
@@ -74,15 +74,15 @@ export function OfficeApp({ map }: Props) {
     <div className="office-root">
       <Hud
         tasks={tasks}
-        selected={selected}
-        onCloseInspector={() => setSelected(null)}
+        selection={selection}
+        onCloseInspector={() => setSelection(null)}
         onRefresh={refresh}
       />
       <OfficeCanvas
         map={map}
         tasks={tasks}
         lastEvent={lastEvent}
-        onSelectTask={setSelected}
+        onSelect={setSelection}
       />
       {error && <div className="toast err">{error}</div>}
       {lastEvent && (

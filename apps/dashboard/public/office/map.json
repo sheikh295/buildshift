@@ -1,20 +1,119 @@
 {
-  "id": "default",
-  "width": 960,
-  "height": 540,
-  "tile": 32,
-  "zones": {
-    "planner": { "x": 80, "y": 80, "label": "Planning" },
-    "test_author": { "x": 280, "y": 80, "label": "QA" },
-    "implementer": { "x": 480, "y": 80, "label": "Build" },
-    "reviewer": { "x": 680, "y": 80, "label": "Review" },
-    "integrating": { "x": 480, "y": 280, "label": "Integrate" },
-    "exit": { "x": 860, "y": 400, "label": "Merged" }
+  "id": "hall-v3",
+  "width": 1280,
+  "height": 720,
+  "tile": 16,
+  "hall": {
+    "x": 28,
+    "y": 44,
+    "w": 1224,
+    "h": 640,
+    "radius": 22,
+    "corridorGap": 52,
+    "wallThickness": 16
   },
+  "cabins": [
+    {
+      "id": "planner",
+      "label": "PLANNING",
+      "x": 44,
+      "y": 60,
+      "w": 210,
+      "h": 608,
+      "accent": "#3d8bfd",
+      "permanent": [
+        { "id": "planner-1", "name": "Morgan", "role": "planner", "seat": 0 }
+      ],
+      "maxHire": 0,
+      "desks": [
+        { "seat": 0, "x": 150, "y": 220 },
+        { "seat": 1, "x": 150, "y": 480 }
+      ],
+      "sofas": [
+        { "id": "sofa-plan", "x": 78, "y": 350, "orient": "v" }
+      ]
+    },
+    {
+      "id": "developers",
+      "label": "ENGINEERING",
+      "x": 270,
+      "y": 60,
+      "w": 470,
+      "h": 608,
+      "accent": "#f0a202",
+      "permanent": [],
+      "maxHire": 9,
+      "hireRoles": ["implementer"],
+      "hireStates": ["ready", "coding"],
+      "desks": [
+        { "seat": 0, "x": 395, "y": 200 },
+        { "seat": 1, "x": 505, "y": 200 },
+        { "seat": 2, "x": 615, "y": 200 },
+        { "seat": 3, "x": 395, "y": 350 },
+        { "seat": 4, "x": 505, "y": 350 },
+        { "seat": 5, "x": 615, "y": 350 },
+        { "seat": 6, "x": 395, "y": 500 },
+        { "seat": 7, "x": 505, "y": 500 },
+        { "seat": 8, "x": 615, "y": 500 }
+      ],
+      "sofas": [
+        { "id": "sofa-dev-n", "x": 505, "y": 115, "orient": "h" },
+        { "id": "sofa-dev-s", "x": 505, "y": 595, "orient": "h" }
+      ]
+    },
+    {
+      "id": "qa",
+      "label": "QA & REVIEW",
+      "x": 756,
+      "y": 60,
+      "w": 250,
+      "h": 608,
+      "accent": "#2dd4a8",
+      "permanent": [],
+      "maxHire": 6,
+      "hireRoles": ["test_author", "reviewer"],
+      "hireStates": ["test_authoring", "testing", "reviewing"],
+      "desks": [
+        { "seat": 0, "x": 825, "y": 200 },
+        { "seat": 1, "x": 935, "y": 200 },
+        { "seat": 2, "x": 825, "y": 350 },
+        { "seat": 3, "x": 935, "y": 350 },
+        { "seat": 4, "x": 825, "y": 500 },
+        { "seat": 5, "x": 935, "y": 500 }
+      ],
+      "sofas": [
+        { "id": "sofa-qa-n", "x": 880, "y": 115, "orient": "h" },
+        { "id": "sofa-qa-s", "x": 880, "y": 595, "orient": "h" }
+      ]
+    },
+    {
+      "id": "integrate",
+      "label": "INTEGRATE",
+      "x": 1022,
+      "y": 60,
+      "w": 214,
+      "h": 608,
+      "accent": "#c084fc",
+      "permanent": [
+        { "id": "merge-1", "name": "Riley", "role": "integrator", "seat": 0 },
+        { "id": "merge-2", "name": "Casey", "role": "integrator", "seat": 1 }
+      ],
+      "maxHire": 0,
+      "hireStates": ["integrating"],
+      "desks": [
+        { "seat": 0, "x": 1130, "y": 220 },
+        { "seat": 1, "x": 1130, "y": 480 }
+      ],
+      "sofas": [
+        { "id": "sofa-merge", "x": 1130, "y": 350, "orient": "h" }
+      ]
+    }
+  ],
   "roles": {
-    "planner": { "color": "#3d8bfd" },
-    "test_author": { "color": "#2dd4a8" },
-    "implementer": { "color": "#f0a202" },
-    "reviewer": { "color": "#c084fc" }
+    "planner": { "color": "#3d8bfd", "shirt": "#2563eb", "skin": "#f0c9a0" },
+    "implementer": { "color": "#f0a202", "shirt": "#d97706", "skin": "#e8b896" },
+    "test_author": { "color": "#2dd4a8", "shirt": "#0d9488", "skin": "#f2d2b0" },
+    "reviewer": { "color": "#a78bfa", "shirt": "#7c3aed", "skin": "#e8c4a8" },
+    "integrator": { "color": "#c084fc", "shirt": "#9333ea", "skin": "#f5d0b5" }
   }
 }

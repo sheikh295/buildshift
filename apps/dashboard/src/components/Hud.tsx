@@ -2,18 +2,18 @@
 
 import { useEffect, useState } from "react";
 import { orch } from "@/lib/api";
-import type { EodDigest, HumanItem, Plan, RuntimeSettings, Task } from "@/lib/types";
+import type { EodDigest, HumanItem, Plan, RuntimeSettings, Selection, Task } from "@/lib/types";
 
 type Panel = "inbox" | "board" | "plan" | "eod" | "control" | null;
 
 type Props = {
   tasks: Task[];
-  selected: Task | null;
+  selection: Selection;
   onCloseInspector: () => void;
   onRefresh: () => void;
 };
 
-export function Hud({ tasks, selected, onCloseInspector, onRefresh }: Props) {
+export function Hud({ tasks, selection, onCloseInspector, onRefresh }: Props) {
   const [panel, setPanel] = useState<Panel>(null);
 
   return (
@@ -50,43 +50,84 @@ export function Hud({ tasks, selected, onCloseInspector, onRefresh }: Props) {
         </button>
       </nav>
 
-      {selected && (
+      {selection?.kind === "task" && (
         <aside className="inspector">
           <header>
-            <strong>Agent</strong>
+            <strong>Task</strong>
             <button type="button" onClick={onCloseInspector}>
               ×
             </button>
           </header>
-          <h3>{selected.title}</h3>
+          <h3>{selection.task.title}</h3>
           <dl>
             <dt>State</dt>
-            <dd>{selected.state}</dd>
+            <dd>{selection.task.state}</dd>
             <dt>Role / stage</dt>
             <dd>
-              {selected.role} / {selected.stage || "—"}
+              {selection.task.role} / {selection.task.stage || "—"}
             </dd>
             <dt>Spend</dt>
             <dd>
-              {selected.spent_usd} / {selected.budget_usd} USD
+              {selection.task.spent_usd} / {selection.task.budget_usd} USD
             </dd>
+            <dt>Branch</dt>
+            <dd>{selection.task.branch || "—"}</dd>
             <dt>PR</dt>
             <dd>
-              {selected.pr_url ? (
-                <a href={selected.pr_url} target="_blank" rel="noreferrer">
+              {selection.task.pr_url ? (
+                <a href={selection.task.pr_url} target="_blank" rel="noreferrer">
                   open
                 </a>
               ) : (
                 "—"
               )}
             </dd>
-            {selected.error && (
+            {selection.task.error && (
               <>
                 <dt>Error</dt>
-                <dd>{selected.error}</dd>
+                <dd>{selection.task.error}</dd>
               </>
             )}
           </dl>
+        </aside>
+      )}
+
+      {selection?.kind === "agent" && (
+        <aside className="inspector">
+          <header>
+            <strong>Session</strong>
+            <button type="button" onClick={onCloseInspector}>
+              ×
+            </button>
+          </header>
+          <h3>{selection.agent.name}</h3>
+          <dl>
+            <dt>Role</dt>
+            <dd>{selection.agent.role}</dd>
+            <dt>Cabin</dt>
+            <dd>{selection.agent.cabinId}</dd>
+            <dt>Status</dt>
+            <dd>{selection.agent.status}</dd>
+            <dt>Staff</dt>
+            <dd>{selection.agent.permanent ? "permanent" : "hired"}</dd>
+            <dt>Working on</dt>
+            <dd>{selection.agent.taskTitle || "— idle / roaming —"}</dd>
+          </dl>
+          {selection.task && (
+            <>
+              <h3 className="sub">Linked task</h3>
+              <dl>
+                <dt>Title</dt>
+                <dd>{selection.task.title}</dd>
+                <dt>State</dt>
+                <dd>{selection.task.state}</dd>
+                <dt>Spend</dt>
+                <dd>
+                  {selection.task.spent_usd} / {selection.task.budget_usd}
+                </dd>
+              </dl>
+            </>
+          )}
         </aside>
       )}
 

@@ -10,6 +10,8 @@ export type Task = {
   pr_url?: string | null;
   error?: string | null;
   review_verdict?: string | null;
+  attempts?: number;
+  branch?: string | null;
 };
 
 export type EventRow = {
@@ -77,11 +79,67 @@ export type EodDigest = {
   risks: string[];
 };
 
+export type CabinPermanent = {
+  id: string;
+  name: string;
+  role: string;
+  seat: number;
+};
+
+export type DeskPlacement = { seat: number; x: number; y: number };
+export type SofaPlacement = { id: string; x: number; y: number; orient: "h" | "v" };
+
+export type CabinDef = {
+  id: string;
+  label: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  accent: string;
+  permanent: CabinPermanent[];
+  maxHire: number;
+  hireRoles?: string[];
+  hireStates?: string[];
+  desks: DeskPlacement[];
+  sofas?: SofaPlacement[];
+  /** @deprecated grid fallback */
+  deskRows?: number;
+  deskCols?: number;
+};
+
+export type HallDef = {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  radius: number;
+  corridorGap: number;
+  wallThickness?: number;
+};
+
 export type OfficeMap = {
   id: string;
   width: number;
   height: number;
   tile: number;
-  zones: Record<string, { x: number; y: number; label: string }>;
-  roles: Record<string, { color: string }>;
+  hall: HallDef;
+  cabins: CabinDef[];
+  roles: Record<string, { color: string; shirt?: string; skin?: string }>;
 };
+
+export type AgentInfo = {
+  id: string;
+  name: string;
+  role: string;
+  cabinId: string;
+  status: "idle" | "working" | "roaming" | "hired" | "sitting" | "chatting";
+  taskId?: string | null;
+  taskTitle?: string | null;
+  permanent: boolean;
+};
+
+export type Selection =
+  | { kind: "task"; task: Task }
+  | { kind: "agent"; agent: AgentInfo; task?: Task | null }
+  | null;

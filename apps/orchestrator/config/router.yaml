@@ -1,0 +1,24 @@
+# Role → tier / model routing. Aliases must exist in services/litellm/config.yaml.
+roles:
+  prd_indexer:
+    tier: T2
+    model: claude-sonnet-4-5
+  planner:
+    tier: T3
+    model: claude-sonnet-4-5
+  test_author:
+    tier: T1
+    model: claude-sonnet-4-5
+  implementer:
+    tier: T1
+    model: claude-sonnet-4-5
+    escalate_to: T2
+  reviewer:
+    tier: T2
+    model: claude-haiku-4-5
+
+limits:
+  task_budget_usd: 3.0
+  daily_budget_usd: 60.0
+  max_attempts_per_tier: 2
+  max_parallel_workers: 4

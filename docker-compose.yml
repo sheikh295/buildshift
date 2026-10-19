@@ -52,7 +52,7 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://buildshift:buildshift@postgres:5432/buildshift}
       TASK_BUDGET_USD: ${TASK_BUDGET_USD:-3.00}
       DAILY_BUDGET_USD: ${DAILY_BUDGET_USD:-60.00}
-      MAX_PARALLEL_WORKERS: ${MAX_PARALLEL_WORKERS:-2}
+      MAX_PARALLEL_WORKERS: ${MAX_PARALLEL_WORKERS:-4}
       MAX_ATTEMPTS_PER_TIER: ${MAX_ATTEMPTS_PER_TIER:-2}
       HARNESS: ${HARNESS:-mock}
       WORKER_IMAGE: ${WORKER_IMAGE:-buildshift-worker:local}
@@ -67,9 +67,12 @@ services:
       LITELLM_URL: http://litellm:4000
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-buildshift-local}
       DEFAULT_IMPLEMENTER_MODEL: ${DEFAULT_IMPLEMENTER_MODEL:-claude-sonnet-4-5}
+      ROUTER_CONFIG_PATH: /app/config/router.yaml
+      MULTI_ROLE_PIPELINE: ${MULTI_ROLE_PIPELINE:-true}
     volumes:
       - ./data:/data
       - .:/repo:ro
+      - ./apps/orchestrator/config:/app/config:ro
       - /var/run/docker.sock:/var/run/docker.sock
     ports:
       - "${ORCHESTRATOR_HOST:-127.0.0.1}:${ORCHESTRATOR_PORT:-8080}:8080"

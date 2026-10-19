@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     host_data_dir: Path | None = None
     repo_root: Path = Path("/repo")  # monorepo mount inside orchestrator container
     migrations_dir: Path = Path("/app/migrations")
+    router_config_path: Path = Path("/app/config/router.yaml")
+    # When true, ad-hoc POST /tasks still works (Week 1). Plan-approved tasks use multi-role.
+    multi_role_pipeline: bool = True
 
     @field_validator("host_data_dir", mode="before")
     @classmethod

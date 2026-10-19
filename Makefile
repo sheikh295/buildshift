@@ -1,4 +1,4 @@
-.PHONY: help up down down-wipe build logs ps health task kill smoke migrate shell
+.PHONY: help up down down-wipe build logs ps health task kill smoke smoke-week2 migrate shell
 
 COMPOSE ?= docker compose
 BUILDSHIFT_URL ?= http://127.0.0.1:8080
@@ -15,7 +15,8 @@ help:
 	@echo "  make logs        Follow orchestrator logs"
 	@echo "  make ps          Show compose services"
 	@echo "  make health      Hit /health"
-	@echo "  make smoke       Enqueue mock task and wait for completion"
+	@echo "  make smoke       Week 1: enqueue mock task and wait"
+	@echo "  make smoke-week2 Week 2: index PRD → approve plan → multi-role merge"
 	@echo "  make task ARGS='create \"title\" -c \"...\"'"
 	@echo "  make kill ARGS='true|false'"
 
@@ -55,6 +56,9 @@ kill:
 
 smoke:
 	./scripts/smoke.sh
+
+smoke-week2:
+	./scripts/smoke-week2.sh
 
 shell:
 	$(COMPOSE) exec orchestrator bash

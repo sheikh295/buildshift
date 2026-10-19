@@ -53,8 +53,22 @@ def create_task_checkout(repo: Path, branch: str, dest: Path, base_branch: str) 
         shutil.rmtree(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     _run(["git", "clone", "--local", str(repo), str(dest)])
-    _run(["git", "checkout", base_branch], cwd=dest)
-    _run(["git", "checkout", "-B", branch], cwd=dest)
+    _run(["git", "fetch", "--all", "--prune"], cwd=dest, check=False)
+    # Prefer existing task branch on origin (multi-stage), else new from base
+    remote_branch = _run(
+        ["git", "ls-remote", "--heads", "origin", branch],
+        cwd=dest,
+        check=False,
+    )
+    if remote_branch.stdout.strip():
+        _run(["git", "checkout", "-B", branch, f"origin/{branch}"], cwd=dest)
+    else:
+        local = _run(["git", "rev-parse", "--verify", branch], cwd=dest, check=False)
+        if local.returncode == 0:
+            _run(["git", "checkout", branch], cwd=dest)
+        else:
+            _run(["git", "checkout", base_branch], cwd=dest)
+            _run(["git", "checkout", "-B", branch], cwd=dest)
     return dest
 
 

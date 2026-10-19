@@ -17,9 +17,10 @@ cp .env.example .env
 # Edit .env if you have keys / a proving repo. Defaults use HARNESS=mock.
 make up    # exports HOST_DATA_DIR for docker-from-docker mounts
 make smoke
+make smoke-week2
 ```
 
-`make` sets `HOST_DATA_DIR` to `$(CURDIR)/data` so the orchestrator can ask the host Docker daemon to mount worktrees correctly (required on Docker Desktop and any docker-from-docker setup).
+`make` sets `HOST_DATA_DIR` to `$(CURDIR)/data` so the orchestrator can ask the host Docker daemon to mount checkouts correctly (required on Docker Desktop and any docker-from-docker setup).
 
 ## Everyday controls
 
@@ -30,10 +31,26 @@ make smoke
 | `make down-wipe` | Stop and wipe DB volume + local repo cache |
 | `make logs` | Tail orchestrator |
 | `make health` | `GET /health` |
-| `make smoke` | One mock task end-to-end |
+| `make smoke` | Week 1: one mock task end-to-end |
+| `make smoke-week2` | Week 2: PRD → plan approve → multi-role tasks |
 | `make kill ARGS=true` | Global kill switch on |
 
-Enqueue a task:
+### Week 2 CLI flow
+
+```bash
+# Index a PRD (or use fixtures/sample-prd.md via make smoke-week2)
+curl -s http://127.0.0.1:8080/prd/products | python3 -m json.tool
+
+# Propose + approve a day plan for a product UUID
+curl -s -X POST http://127.0.0.1:8080/plans/propose \
+  -H 'content-type: application/json' \
+  -d '{"product_id":"<uuid>","max_tickets":3}'
+curl -s -X POST http://127.0.0.1:8080/plans/<plan_id>/approve
+```
+
+Role → model routing lives in `apps/orchestrator/config/router.yaml` (aliases must exist in `services/litellm/config.yaml`).
+
+Enqueue an ad-hoc Week 1 task:
 
 ```bash
 curl -s http://127.0.0.1:8080/tasks -H 'content-type: application/json' \

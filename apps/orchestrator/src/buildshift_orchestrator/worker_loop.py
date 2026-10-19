@@ -13,18 +13,22 @@ from buildshift_orchestrator.config import Settings, get_settings
 from buildshift_orchestrator.control import is_kill_switch_on, under_daily_budget
 from buildshift_orchestrator.db import SessionLocal
 from buildshift_orchestrator.models import Task, TaskState
-from buildshift_orchestrator.runner.pipeline import run_task
+from buildshift_orchestrator.runner.locks import recover_orphaned_inflight
+from buildshift_orchestrator.runner.pipeline import STAGE_STATE, run_task
 
 log = logging.getLogger(__name__)
 
+INFLIGHT = (
+    TaskState.test_authoring.value,
+    TaskState.coding.value,
+    TaskState.testing.value,
+    TaskState.reviewing.value,
+    TaskState.integrating.value,
+)
+
 
 def count_inflight(db: Session) -> int:
-    inflight = [
-        TaskState.coding.value,
-        TaskState.testing.value,
-        TaskState.integrating.value,
-    ]
-    return db.scalar(select(func.count()).select_from(Task).where(Task.state.in_(inflight))) or 0
+    return db.scalar(select(func.count()).select_from(Task).where(Task.state.in_(INFLIGHT))) or 0
 
 
 def claim_next_task(db: Session) -> Task | None:
@@ -45,8 +49,8 @@ def claim_next_task(db: Session) -> Task | None:
     task = db.get(Task, row[0])
     if task is None:
         return None
-    # Mark coding immediately so other claimers skip it after commit
-    task.state = TaskState.coding.value
+    stage = task.stage or task.role or "implementer"
+    task.state = STAGE_STATE.get(stage, TaskState.coding.value)
     db.commit()
     db.refresh(task)
     return task
@@ -63,8 +67,6 @@ def _execute_task(settings: Settings, task_id) -> None:
             task.error = "task budget exceeded before start"
             db.commit()
             return
-        # pipeline increments attempts and re-sets coding; roll attempts back one notch visually
-        # by letting pipeline own the transition — reset to ready-adjacent: already coding
         run_task(db, settings, task)
     except Exception:
         log.exception("background task %s crashed", task_id)
@@ -83,6 +85,13 @@ class WorkerLoop:
         if self._thread and self._thread.is_alive():
             return
         self._stop.clear()
+        db = SessionLocal()
+        try:
+            n = recover_orphaned_inflight(db, force=True)
+            if n:
+                log.warning("recovered %s orphaned inflight task(s) on startup", n)
+        finally:
+            db.close()
         self._pool = ThreadPoolExecutor(
             max_workers=self.settings.max_parallel_workers,
             thread_name_prefix="buildshift-task",
@@ -104,6 +113,7 @@ class WorkerLoop:
             try:
                 db = SessionLocal()
                 try:
+                    recover_orphaned_inflight(db)
                     if is_kill_switch_on(db):
                         time.sleep(self.settings.poll_interval_sec)
                         continue
@@ -123,7 +133,6 @@ class WorkerLoop:
                     db.close()
 
                 self._pool.submit(_execute_task, self.settings, task_id)
-                # brief yield so claim counts can update
                 time.sleep(0.2)
             except Exception:
                 log.exception("worker loop iteration failed")

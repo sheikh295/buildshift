@@ -186,8 +186,9 @@ def _prepare_checkout(
     worktrees_dir = settings.data_dir / "worktrees"
     branch = task.branch or f"buildshift/{task.id.hex[:12]}"
     worktree = worktrees_dir / task.id.hex
-    gitops.ensure_repo(clone_url, repo_path, base)
-    gitops.create_task_checkout(repo_path, branch, worktree, base)
+    token = settings.github_token or ""
+    gitops.ensure_repo(clone_url, repo_path, base, token=token)
+    gitops.create_task_checkout(repo_path, branch, worktree, base, token=token)
     subprocess.run(["chown", "-R", "10001:10001", str(worktree)], check=False)
     return clone_url, repo_path, worktree, branch, Path(repo_name), base
 
@@ -210,9 +211,9 @@ def _integrate(
         task.updated_at = datetime.now(timezone.utc)
         db.commit()
 
-        token = settings.github_token
+        token = settings.github_token or ""
         try:
-            gitops.rebase_onto_base(worktree, base)
+            gitops.rebase_onto_base(worktree, base, token=token)
             gitops.run_local_ci(worktree)
             gitops.push_branch(worktree, branch, token=token, force=True)
 
@@ -236,7 +237,7 @@ def _integrate(
                 )
                 tip = gitops.current_head(worktree)
                 # Refresh local mirror so subsequent checkouts see the merge
-                gitops.ensure_repo(clone_url, repo_path, base)
+                gitops.ensure_repo(clone_url, repo_path, base, token=token)
             else:
                 tip = gitops.land_on_base_local(
                     checkout=worktree,
@@ -245,7 +246,7 @@ def _integrate(
                     base_branch=base,
                 )
                 # Mirror already at tip; refresh from bare for consistency
-                gitops.ensure_repo(clone_url, repo_path, base)
+                gitops.ensure_repo(clone_url, repo_path, base, token=token)
                 task.pr_url = f"local://{repo_name}/{base}@{tip[:12]}"
 
             release_locks(db, task.id)

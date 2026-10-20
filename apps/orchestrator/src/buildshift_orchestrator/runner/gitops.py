@@ -3,6 +3,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 
 class GitError(RuntimeError):
@@ -28,22 +29,69 @@ def _run(cmd: list[str], *, cwd: Path | None = None, check: bool = True) -> subp
     return result
 
 
-def ensure_repo(clone_url: str, dest: Path, branch: str) -> Path:
+def strip_git_credentials(url: str) -> str:
+    """Remove embedded userinfo from an HTTPS git URL (never persist tokens)."""
+    url = (url or "").strip()
+    if not url.startswith("https://") or "@" not in url.split("://", 1)[-1].split("/", 1)[0]:
+        return url
+    parts = urlsplit(url)
+    host = parts.hostname or ""
+    if parts.port:
+        host = f"{host}:{parts.port}"
+    return urlunsplit((parts.scheme, host, parts.path, parts.query, parts.fragment))
+
+
+def with_github_token(url: str, token: str) -> str:
+    """Inject a GitHub PAT into an HTTPS clone URL for non-interactive auth."""
+    url = strip_git_credentials((url or "").strip())
+    token = (token or "").strip()
+    if not token or not url.startswith("https://"):
+        return url
+    # Only rewrite GitHub hosts — leave other remotes untouched
+    host = (urlsplit(url).hostname or "").lower()
+    if host not in {"github.com", "www.github.com"} and not host.endswith(".github.com"):
+        # Still allow github.com paths; also accept api-less HTTPS github
+        if "github.com" not in host:
+            return url
+    return url.replace("https://", f"https://x-access-token:{token}@", 1)
+
+
+def _set_origin(checkout: Path, url: str) -> None:
+    existing = _run(["git", "remote"], cwd=checkout, check=False)
+    if "origin" in (existing.stdout or "").split():
+        _run(["git", "remote", "set-url", "origin", url], cwd=checkout)
+    else:
+        _run(["git", "remote", "add", "origin", url], cwd=checkout)
+
+
+def ensure_repo(clone_url: str, dest: Path, branch: str, token: str = "") -> Path:
+    """Clone or refresh a local mirror. Uses GITHUB_TOKEN for private HTTPS remotes."""
+    clean = strip_git_credentials(clone_url)
+    authed = with_github_token(clean, token)
     dest.parent.mkdir(parents=True, exist_ok=True)
     if (dest / ".git").exists():
+        if token and clean.startswith("https://"):
+            _set_origin(dest, authed)
         _run(["git", "fetch", "--all", "--prune"], cwd=dest, check=False)
         _run(["git", "checkout", branch], cwd=dest, check=False)
         _run(["git", "reset", "--hard", f"origin/{branch}"], cwd=dest, check=False)
         _run(["git", "reset", "--hard", branch], cwd=dest, check=False)
+        # Never leave credentials in .git/config
+        if clean.startswith("https://") or clean.startswith("git@"):
+            _set_origin(dest, clean)
         return dest
 
     if dest.exists():
         shutil.rmtree(dest)
-    _run(["git", "clone", "--branch", branch, clone_url, str(dest)])
+    _run(["git", "clone", "--branch", branch, authed, str(dest)])
+    if clean.startswith("https://") or clean.startswith("git@"):
+        _set_origin(dest, clean)
     return dest
 
 
-def create_task_checkout(repo: Path, branch: str, dest: Path, base_branch: str) -> Path:
+def create_task_checkout(
+    repo: Path, branch: str, dest: Path, base_branch: str, *, token: str = ""
+) -> Path:
     """Create an isolated checkout (local clone) for one task.
 
     Prefer this over ``git worktree`` so the worker container owns a private
@@ -54,22 +102,34 @@ def create_task_checkout(repo: Path, branch: str, dest: Path, base_branch: str) 
     dest.parent.mkdir(parents=True, exist_ok=True)
     # --no-local: avoid hardlinks into the mirror so land_on_base cannot dirty siblings
     _run(["git", "clone", "--no-local", str(repo), str(dest)])
-    _run(["git", "fetch", "--all", "--prune"], cwd=dest, check=False)
-    # Prefer existing task branch on origin (multi-stage), else new from base
-    remote_branch = _run(
-        ["git", "ls-remote", "--heads", "origin", branch],
-        cwd=dest,
-        check=False,
-    )
-    if remote_branch.stdout.strip():
-        _run(["git", "checkout", "-B", branch, f"origin/{branch}"], cwd=dest)
-    else:
-        local = _run(["git", "rev-parse", "--verify", branch], cwd=dest, check=False)
-        if local.returncode == 0:
-            _run(["git", "checkout", branch], cwd=dest)
+
+    # Point origin at the real remote (GitHub) so push/PR can reach the network
+    upstream = _run(["git", "remote", "get-url", "origin"], cwd=repo, check=False).stdout.strip()
+    upstream = strip_git_credentials(upstream)
+    network = upstream.startswith("https://") or upstream.startswith("git@")
+    try:
+        if network:
+            _set_origin(dest, with_github_token(upstream, token) if token else upstream)
+        _run(["git", "fetch", "--all", "--prune"], cwd=dest, check=False)
+
+        # Prefer existing task branch on origin (multi-stage), else new from base
+        remote_branch = _run(
+            ["git", "ls-remote", "--heads", "origin", branch],
+            cwd=dest,
+            check=False,
+        )
+        if remote_branch.stdout.strip():
+            _run(["git", "checkout", "-B", branch, f"origin/{branch}"], cwd=dest)
         else:
-            _run(["git", "checkout", base_branch], cwd=dest)
-            _run(["git", "checkout", "-B", branch], cwd=dest)
+            local = _run(["git", "rev-parse", "--verify", branch], cwd=dest, check=False)
+            if local.returncode == 0:
+                _run(["git", "checkout", branch], cwd=dest)
+            else:
+                _run(["git", "checkout", base_branch], cwd=dest)
+                _run(["git", "checkout", "-B", branch], cwd=dest)
+    finally:
+        if network:
+            _set_origin(dest, upstream)
     return dest
 
 
@@ -79,16 +139,20 @@ def remove_checkout(dest: Path) -> None:
 
 
 def push_branch(checkout: Path, branch: str, token: str = "", *, force: bool = False) -> None:
-    if token:
-        remote = _run(["git", "remote", "get-url", "origin"], cwd=checkout).stdout.strip()
-        if remote.startswith("https://") and "@" not in remote:
-            authed = remote.replace("https://", f"https://x-access-token:{token}@")
-            _run(["git", "remote", "set-url", "origin", authed], cwd=checkout)
-    cmd = ["git", "push", "-u", "origin", branch]
-    if force:
-        # Required after rebase rewrites commits already pushed during earlier stages
-        cmd.insert(2, "--force-with-lease")
-    _run(cmd, cwd=checkout)
+    remote = _run(["git", "remote", "get-url", "origin"], cwd=checkout).stdout.strip()
+    clean = strip_git_credentials(remote)
+    if token and clean.startswith("https://"):
+        _set_origin(checkout, with_github_token(clean, token))
+    try:
+        cmd = ["git", "push", "-u", "origin", branch]
+        if force:
+            # Required after rebase rewrites commits already pushed during earlier stages
+            cmd.insert(2, "--force-with-lease")
+        _run(cmd, cwd=checkout)
+    finally:
+        # Scrub credentials from the checkout remote
+        if token and clean.startswith("https://"):
+            _set_origin(checkout, clean)
 
 
 def current_head(checkout: Path) -> str:
@@ -111,8 +175,16 @@ class RebaseConflict(GitError):
     """Task branch could not rebase cleanly onto base."""
 
 
-def fetch_origin(checkout: Path) -> None:
-    _run(["git", "fetch", "--all", "--prune"], cwd=checkout, check=False)
+def fetch_origin(checkout: Path, token: str = "") -> None:
+    remote = _run(["git", "remote", "get-url", "origin"], cwd=checkout, check=False).stdout.strip()
+    clean = strip_git_credentials(remote)
+    if token and clean.startswith("https://"):
+        _set_origin(checkout, with_github_token(clean, token))
+    try:
+        _run(["git", "fetch", "--all", "--prune"], cwd=checkout, check=False)
+    finally:
+        if token and clean.startswith("https://"):
+            _set_origin(checkout, clean)
 
 
 def _ensure_commit_identity(checkout: Path) -> None:
@@ -121,7 +193,7 @@ def _ensure_commit_identity(checkout: Path) -> None:
     _run(["git", "config", "user.name", "Buildshift"], cwd=checkout, check=False)
 
 
-def rebase_onto_base(checkout: Path, base_branch: str) -> None:
+def rebase_onto_base(checkout: Path, base_branch: str, token: str = "") -> None:
     """Bring origin/<base> into the task branch (merge).
 
     Prefer merge over rebase: concurrent landings + Docker bind mounts were
@@ -131,7 +203,7 @@ def rebase_onto_base(checkout: Path, base_branch: str) -> None:
     # Discard noise from chown / bind mounts before integrating
     _run(["git", "reset", "--hard", "HEAD"], cwd=checkout, check=False)
     _run(["git", "clean", "-fd"], cwd=checkout, check=False)
-    fetch_origin(checkout)
+    fetch_origin(checkout, token=token)
     upstream = f"origin/{base_branch}"
     has_remote = _run(["git", "rev-parse", "--verify", upstream], cwd=checkout, check=False)
     target = upstream if has_remote.returncode == 0 else base_branch

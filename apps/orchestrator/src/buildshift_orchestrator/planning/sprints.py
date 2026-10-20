@@ -79,7 +79,7 @@ def connect_project_repo(
             raise ValueError("settings required to sync repo")
         mirror = project_mirror_path(settings, project)
         try:
-            gitops.ensure_repo(url, mirror, branch)
+            gitops.ensure_repo(url, mirror, branch, token=settings.github_token or "")
         except gitops.GitError as exc:
             raise ValueError(f"failed to clone/sync repo: {exc}") from exc
         project.repo_path = str(mirror)
@@ -111,7 +111,12 @@ def sync_project_repo(db: Session, project_id: uuid.UUID, settings: Settings) ->
         raise ValueError("project has no repo_url — connect a repository first")
     mirror = project_mirror_path(settings, project)
     try:
-        gitops.ensure_repo(project.repo_url.strip(), mirror, project.repo_branch or "main")
+        gitops.ensure_repo(
+            project.repo_url.strip(),
+            mirror,
+            project.repo_branch or "main",
+            token=settings.github_token or "",
+        )
     except gitops.GitError as exc:
         raise ValueError(f"failed to sync repo: {exc}") from exc
     project.repo_path = str(mirror)

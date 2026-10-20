@@ -436,7 +436,10 @@ def _prd_docs_root(
             else sprint_svc.project_mirror_path(eff, project)
         )
         gitops.ensure_repo(
-            project.repo_url.strip(), mirror, project.repo_branch or "main"
+            project.repo_url.strip(),
+            mirror,
+            project.repo_branch or "main",
+            token=eff.github_token or "",
         )
         return mirror / "docs" / "prd"
 
@@ -444,7 +447,9 @@ def _prd_docs_root(
     repos_dir = eff.data_dir / "repos"
     repo_name = "proving" if eff.proving_repo_url else "demo-app"
     repo_path = repos_dir / repo_name
-    gitops.ensure_repo(clone_url, repo_path, eff.proving_repo_branch)
+    gitops.ensure_repo(
+        clone_url, repo_path, eff.proving_repo_branch, token=eff.github_token or ""
+    )
     return repo_path / "docs" / "prd"
 
 

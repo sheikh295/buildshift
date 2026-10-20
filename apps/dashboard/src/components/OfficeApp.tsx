@@ -12,7 +12,19 @@ export function OfficeApp({ map }: Props) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [selection, setSelection] = useState<Selection>(null);
   const [lastEvent, setLastEvent] = useState<EventRow | null>(null);
+  const [eventExpanded, setEventExpanded] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return sessionStorage.getItem("bs-event-toast-expanded") === "1";
+  });
   const [error, setError] = useState("");
+
+  const toggleEventToast = useCallback(() => {
+    setEventExpanded((prev) => {
+      const next = !prev;
+      sessionStorage.setItem("bs-event-toast-expanded", next ? "1" : "0");
+      return next;
+    });
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
@@ -86,10 +98,24 @@ export function OfficeApp({ map }: Props) {
       />
       {error && <div className="toast err">{error}</div>}
       {lastEvent && (
-        <div className="toast event">
-          #{lastEvent.id} {lastEvent.kind}
-          {lastEvent.summary ? ` — ${lastEvent.summary}` : ""}
-        </div>
+        <button
+          type="button"
+          className={`toast event ${eventExpanded ? "expanded" : "collapsed"}`}
+          onClick={toggleEventToast}
+          title={eventExpanded ? "Collapse event" : "Expand event"}
+        >
+          {eventExpanded ? (
+            <>
+              #{lastEvent.id} {lastEvent.kind}
+              {lastEvent.summary ? ` — ${lastEvent.summary}` : ""}
+            </>
+          ) : (
+            <>
+              #{lastEvent.id} {lastEvent.kind}
+              {lastEvent.summary ? ` — ${lastEvent.summary.slice(0, 48)}${lastEvent.summary.length > 48 ? "…" : ""}` : ""}
+            </>
+          )}
+        </button>
       )}
     </div>
   );

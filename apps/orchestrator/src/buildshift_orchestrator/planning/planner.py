@@ -56,6 +56,7 @@ def kickoff_product(db: Session, product_id: uuid.UUID) -> dict:
                     HumanItem(
                         id=uuid.uuid4(),
                         product_id=product.id,
+                        project_id=product.project_id,
                         kind=kind,
                         summary=req.text,
                         needed_by="kickoff",

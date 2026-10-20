@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from buildshift_orchestrator.events import emit
-from buildshift_orchestrator.models import PrdProduct, PrdRequirement
+from buildshift_orchestrator.models import PrdProduct, PrdRequirement, Project
 
 PLATFORM_KEYWORDS = (
     "identity",
@@ -27,7 +27,7 @@ def _slugify(title: str) -> str:
 
 
 def _parse_markdown(text: str) -> list[dict]:
-    """Split PRD into products (## headings) with numbered requirements."""
+    """Split PRD into modules (## headings) with numbered requirements."""
     lines = text.splitlines()
     products: list[dict] = []
     current: dict | None = None
@@ -69,7 +69,6 @@ def _parse_markdown(text: str) -> list[dict]:
             continue
 
         if req and (in_reqs or True):
-            # Accept numbered lists under a product even without ### Requirements
             if not in_reqs and current["requirements"]:
                 pass
             current["requirements"].append(
@@ -85,7 +84,6 @@ def _parse_markdown(text: str) -> list[dict]:
             buf.append(line)
 
     flush_buf()
-    # Drop empty products with no requirements
     return [p for p in products if p["requirements"] or p.get("summary")]
 
 
@@ -101,29 +99,68 @@ def index_prd_markdown(
     db: Session,
     markdown: str,
     *,
+    project_id: uuid.UUID | None = None,
     docs_root: Path | None = None,
     source_name: str = "uploaded.md",
 ) -> list[PrdProduct]:
     parsed = _parse_markdown(markdown)
     if not parsed:
-        raise ValueError("no products found; use ## Product headings and numbered requirements")
+        # Single-module fallback: treat whole doc as one module under project title
+        project = db.get(Project, project_id) if project_id else None
+        title = project.title if project else "Main"
+        base_slug = project.slug if project else "main"
+        reqs = []
+        for line in markdown.splitlines():
+            m = re.match(r"^(\d+)[.)]\s+(.+)$", line.strip())
+            if m:
+                reqs.append({"req_key": f"R{m.group(1)}", "text": m.group(2).strip()})
+        if not reqs and markdown.strip():
+            reqs.append({"req_key": "R1", "text": markdown.strip()[:2000]})
+        if not reqs:
+            raise ValueError(
+                "no modules found; use ## headings and numbered requirements, or paste PRD body"
+            )
+        parsed = [
+            {
+                "title": title,
+                "slug": base_slug,
+                "summary": "",
+                "requirements": reqs,
+            }
+        ]
 
     created: list[PrdProduct] = []
+    project = db.get(Project, project_id) if project_id else None
+    prefix = f"{project.slug}--" if project else ""
+
     for i, item in enumerate(parsed):
-        slug = item["slug"]
-        existing = db.scalar(select(PrdProduct).where(PrdProduct.slug == slug))
+        slug = f"{prefix}{item['slug']}" if prefix else item["slug"]
+        # Keep slug unique globally; prefer match within project
+        existing = None
+        if project_id:
+            existing = db.scalar(
+                select(PrdProduct).where(
+                    PrdProduct.project_id == project_id,
+                    PrdProduct.slug == slug,
+                )
+            )
+        if existing is None:
+            existing = db.scalar(select(PrdProduct).where(PrdProduct.slug == slug))
+
         if existing:
             product = existing
             product.title = item["title"]
             product.summary = item.get("summary") or product.summary
             product.build_order = _build_order(item["title"], i)
-            # replace requirements
+            if project_id:
+                product.project_id = project_id
             for req in list(product.requirements):
                 db.delete(req)
             db.flush()
         else:
             product = PrdProduct(
                 id=uuid.uuid4(),
+                project_id=project_id,
                 slug=slug,
                 title=item["title"],
                 summary=item.get("summary") or "",
@@ -158,8 +195,11 @@ def index_prd_markdown(
     emit(
         db,
         kind="prd.indexed",
-        summary=f"Indexed {len(created)} products from {source_name}",
-        payload={"product_ids": [str(p.id) for p in created]},
+        summary=f"Indexed {len(created)} modules from {source_name}",
+        payload={
+            "product_ids": [str(p.id) for p in created],
+            "project_id": str(project_id) if project_id else None,
+        },
     )
     db.commit()
     for p in created:
@@ -167,5 +207,8 @@ def index_prd_markdown(
     return sorted(created, key=lambda p: p.build_order)
 
 
-def list_products(db: Session) -> list[PrdProduct]:
-    return list(db.scalars(select(PrdProduct).order_by(PrdProduct.build_order, PrdProduct.title)))
+def list_products(db: Session, project_id: uuid.UUID | None = None) -> list[PrdProduct]:
+    q = select(PrdProduct).order_by(PrdProduct.build_order, PrdProduct.title)
+    if project_id:
+        q = q.where(PrdProduct.project_id == project_id)
+    return list(db.scalars(q))

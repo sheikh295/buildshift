@@ -12,6 +12,12 @@ export type Task = {
   review_verdict?: string | null;
   attempts?: number;
   branch?: string | null;
+  project_id?: string | null;
+  sprint_id?: string | null;
+  epic_id?: string | null;
+  product_id?: string | null;
+  parent_epic?: string | null;
+  pause_notes?: string | null;
 };
 
 export type EventRow = {
@@ -29,11 +35,98 @@ export type EventRow = {
 export type HumanItem = {
   id: string;
   task_id?: string | null;
+  project_id?: string | null;
+  sprint_id?: string | null;
+  product_id?: string | null;
   kind: string;
   summary: string;
   status: string;
   reply?: string | null;
   needed_by?: string | null;
+};
+
+export type HitlTreeItem = {
+  id: string;
+  kind: string;
+  summary: string;
+  status: string;
+  task_id?: string | null;
+  needed_by?: string | null;
+  created_at: string;
+};
+
+export type HitlSprintNode = {
+  sprint_id: string | null;
+  sprint_label: string;
+  count: number;
+  items: HitlTreeItem[];
+};
+
+export type HitlProjectNode = {
+  project_id: string | null;
+  project_title: string;
+  count: number;
+  sprints: HitlSprintNode[];
+};
+
+export type HitlTree = { projects: HitlProjectNode[] };
+
+export type Project = {
+  id: string;
+  slug: string;
+  title: string;
+  status: string;
+  prd_path?: string | null;
+  has_prd?: boolean;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type PrdModule = {
+  id: string;
+  project_id?: string | null;
+  slug: string;
+  title: string;
+  summary: string;
+  build_order: number;
+  status: string;
+};
+
+export type ProjectDetail = {
+  project: Project;
+  modules: PrdModule[];
+  sprint_count: number;
+  open_hitl: number;
+};
+
+export type Sprint = {
+  id: string;
+  project_id: string;
+  mode: string;
+  status: string;
+  capacity_hours: number | string;
+  goals: unknown[];
+  estimated_spend_usd: number | string;
+  estimated_hours: number | string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  created_at: string;
+};
+
+export type Epic = {
+  id: string;
+  sprint_id: string;
+  project_id: string;
+  product_id?: string | null;
+  title: string;
+  status: string;
+  sort_order: number;
+};
+
+export type SprintDetail = {
+  sprint: Sprint;
+  epics: { epic: Epic; tasks: Task[] }[];
+  ungrouped_tasks: Task[];
 };
 
 export type RuntimeSettings = {
@@ -65,8 +158,24 @@ export type Plan = {
   estimated_spend_usd: number | string;
 };
 
+export type EodSession = {
+  run_id: string;
+  task_id: string;
+  task_title: string;
+  role: string;
+  model?: string | null;
+  status: string;
+  cost_usd: number;
+  tokens_in: number;
+  tokens_out: number;
+  started_at?: string | null;
+  ended_at?: string | null;
+  duration_sec?: number | null;
+};
+
 export type EodDigest = {
   day: string;
+  project_id?: string | null;
   counts_by_state: Record<string, number>;
   merged: number;
   reviewing: number;
@@ -77,6 +186,33 @@ export type EodDigest = {
   open_hitl: number;
   recent_events: EventRow[];
   risks: string[];
+  sessions?: EodSession[];
+  agents?: { role: string; runs: number; cost_usd: number; duration_sec: number }[];
+  hierarchy?: {
+    sprint: Sprint;
+    epics: { epic: Epic; tasks: Task[] }[];
+  }[];
+};
+
+export type UsageBucket = {
+  key: string;
+  label: string;
+  cost_usd: number;
+  tokens_in: number;
+  tokens_out: number;
+  run_count: number;
+  models: Record<string, number>;
+};
+
+export type UsageReport = {
+  from_day?: string | null;
+  to_day?: string | null;
+  group_by: string;
+  total_cost_usd: number;
+  total_tokens_in: number;
+  total_tokens_out: number;
+  buckets: UsageBucket[];
+  model_totals: Record<string, number>;
 };
 
 export type CabinPermanent = {
@@ -105,9 +241,7 @@ export type CabinDef = {
   hireStates?: string[];
   desks: DeskPlacement[];
   sofas?: SofaPlacement[];
-  /** Hire/fire gate for dynamic cabins */
   door?: DoorPlacement;
-  /** @deprecated grid fallback */
   deskRows?: number;
   deskCols?: number;
 };

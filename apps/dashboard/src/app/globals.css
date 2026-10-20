@@ -112,6 +112,56 @@ a {
 
 .drawer {
   right: 1rem;
+  width: min(480px, 94vw);
+}
+
+.tree-node {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.tree-node.nest,
+.card-row.nest,
+.nest {
+  margin-left: 0.75rem;
+  padding-left: 0.5rem;
+  border-left: 1px solid var(--line);
+}
+
+.tree-toggle {
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: 0.85rem;
+  cursor: pointer;
+  padding: 0.25rem 0;
+}
+
+.tree-toggle:hover {
+  color: var(--accent);
+}
+
+button.linkish {
+  background: none;
+  border: none;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  padding: 0;
+}
+
+button.linkish:hover {
+  color: var(--accent);
+}
+
+.tree ul {
+  margin: 0.25rem 0 0.5rem;
+  padding-left: 1rem;
+  list-style: disc;
 }
 
 .inspector {
@@ -283,21 +333,43 @@ a {
 .toast {
   position: absolute;
   z-index: 40;
-  left: 50%;
-  transform: translateX(-50%);
-  bottom: 1rem;
-  max-width: min(640px, 92vw);
-  padding: 0.45rem 0.85rem;
-  background: rgba(14, 21, 32, 0.92);
+  left: 0;
+  right: auto;
+  bottom: 0;
+  transform: none;
+  max-width: min(420px, calc(100vw - 2rem));
+  padding: 0.35rem 0.65rem;
+  background: rgba(14, 21, 32, 0.94);
   border: 1px solid var(--line);
+  border-bottom: none;
+  border-left: none;
   font-family: var(--font-display);
   font-size: 0.75rem;
 }
 
+.toast.event {
+  cursor: pointer;
+  user-select: none;
+}
+
+.toast.event.collapsed {
+  max-width: min(280px, 70vw);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.toast.event.expanded {
+  max-width: min(520px, 92vw);
+  white-space: normal;
+  padding: 0.5rem 0.75rem;
+}
+
 .toast.err {
-  bottom: 3rem;
+  bottom: 2.25rem;
   border-color: var(--err);
   color: var(--err);
+  cursor: default;
 }
 
 .login-page {

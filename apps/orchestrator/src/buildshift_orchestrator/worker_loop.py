@@ -13,7 +13,8 @@ from sqlalchemy.orm import Session
 from buildshift_orchestrator.config import Settings, get_settings
 from buildshift_orchestrator.control import is_kill_switch_on, under_daily_budget
 from buildshift_orchestrator.db import SessionLocal
-from buildshift_orchestrator.models import Task, TaskState
+from buildshift_orchestrator.models import Sprint, Task, TaskState
+from buildshift_orchestrator.planning.sprints import finalize_pausing_sprints
 from buildshift_orchestrator.runner.locks import recover_orphaned_inflight
 from buildshift_orchestrator.runner.pipeline import STAGE_STATE, run_task
 from buildshift_orchestrator.runtime_settings import effective_settings
@@ -46,7 +47,7 @@ def _deps_satisfied(db: Session, task: Task) -> bool:
 
 
 def claim_next_task(db: Session) -> Task | None:
-    """Claim the oldest ready task whose deps are all merged."""
+    """Claim the oldest ready task whose deps are all merged (skip paused sprints)."""
     rows = db.execute(
         text(
             """
@@ -63,6 +64,10 @@ def claim_next_task(db: Session) -> Task | None:
         task = db.get(Task, row[0])
         if task is None:
             continue
+        if task.sprint_id:
+            sprint = db.get(Sprint, task.sprint_id)
+            if sprint is not None and sprint.status in ("pausing", "paused"):
+                continue
         if not _deps_satisfied(db, task):
             continue
         stage = task.stage or task.role or "implementer"
@@ -136,6 +141,7 @@ class WorkerLoop:
                 db = SessionLocal()
                 try:
                     recover_orphaned_inflight(db)
+                    finalize_pausing_sprints(db)
                     if is_kill_switch_on(db):
                         time.sleep(poll)
                         continue

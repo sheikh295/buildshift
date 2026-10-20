@@ -21,8 +21,20 @@ from buildshift_orchestrator.control import (
 )
 from buildshift_orchestrator.db import SessionLocal, get_db
 from buildshift_orchestrator.events import emit
-from buildshift_orchestrator.models import DailyPlan, Event, HumanItem, RuntimeSettings, Task, TaskState
+from buildshift_orchestrator.models import (
+    DailyPlan,
+    Epic,
+    Event,
+    HumanItem,
+    Project,
+    Run,
+    RuntimeSettings,
+    Sprint,
+    Task,
+    TaskState,
+)
 from buildshift_orchestrator.planning.planner import approve_plan, kickoff_product, propose_plan
+from buildshift_orchestrator.planning import sprints as sprint_svc
 from buildshift_orchestrator.prd.indexer import index_prd_markdown, list_products
 from buildshift_orchestrator.runner.pipeline import resolve_clone_url
 from buildshift_orchestrator.runner import gitops
@@ -33,8 +45,14 @@ from buildshift_orchestrator.runtime_settings import (
 )
 from buildshift_orchestrator.schemas import (
     EodDigestOut,
+    EodSessionOut,
+    EpicOut,
     EventOut,
     HealthOut,
+    HitlProjectNode,
+    HitlSprintNode,
+    HitlTreeItem,
+    HitlTreeOut,
     HumanItemCreate,
     HumanItemOut,
     HumanItemReplyIn,
@@ -47,10 +65,22 @@ from buildshift_orchestrator.schemas import (
     PrdIndexIn,
     PrdIndexOut,
     PrdProductOut,
+    ProjectCreate,
+    ProjectDetailOut,
+    ProjectOut,
+    ProjectPrdIn,
+    ProjectPrdOut,
     RuntimeSettingsIn,
     RuntimeSettingsOut,
+    SprintDetailOut,
+    SprintKickoffOut,
+    SprintOut,
+    SprintPauseOut,
+    SprintProposeIn,
     TaskCreate,
     TaskOut,
+    UsageBucket,
+    UsageOut,
 )
 
 router = APIRouter()
@@ -125,8 +155,168 @@ def create_task(
 
 
 @router.get("/tasks", response_model=list[TaskOut])
-def list_tasks(db: Session = Depends(get_db), limit: int = 50) -> list[Task]:
-    return list(db.scalars(select(Task).order_by(Task.created_at.desc()).limit(limit)))
+def list_tasks(
+    db: Session = Depends(get_db),
+    limit: int = 50,
+    project_id: uuid.UUID | None = None,
+    sprint_id: uuid.UUID | None = None,
+) -> list[Task]:
+    q = select(Task).order_by(Task.created_at.desc()).limit(limit)
+    if project_id:
+        q = q.where(Task.project_id == project_id)
+    if sprint_id:
+        q = q.where(Task.sprint_id == sprint_id)
+    return list(db.scalars(q))
+
+
+def _project_out(p: Project) -> ProjectOut:
+    return ProjectOut(
+        id=p.id,
+        slug=p.slug,
+        title=p.title,
+        status=p.status,
+        prd_path=p.prd_path,
+        has_prd=bool((p.prd_markdown or "").strip() or p.prd_path),
+        created_at=p.created_at,
+        updated_at=p.updated_at,
+    )
+
+
+@router.post("/projects", response_model=ProjectOut, status_code=201)
+def projects_create(body: ProjectCreate, db: Session = Depends(get_db)) -> ProjectOut:
+    try:
+        p = sprint_svc.create_project(db, body.title, body.slug)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _project_out(p)
+
+
+@router.get("/projects", response_model=list[ProjectOut])
+def projects_list(db: Session = Depends(get_db)) -> list[ProjectOut]:
+    return [_project_out(p) for p in sprint_svc.list_projects(db)]
+
+
+@router.get("/projects/{project_id}", response_model=ProjectDetailOut)
+def projects_get(project_id: uuid.UUID, db: Session = Depends(get_db)) -> ProjectDetailOut:
+    try:
+        detail = sprint_svc.project_detail(db, project_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return ProjectDetailOut(
+        project=_project_out(detail["project"]),
+        modules=[PrdProductOut.model_validate(m) for m in detail["modules"]],
+        sprint_count=detail["sprint_count"],
+        open_hitl=detail["open_hitl"],
+    )
+
+
+@router.post("/projects/{project_id}/prd", response_model=ProjectPrdOut)
+def projects_upload_prd(
+    project_id: uuid.UUID,
+    body: ProjectPrdIn,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> ProjectPrdOut:
+    try:
+        docs = _prd_docs_root(settings)
+        result = sprint_svc.upload_prd(
+            db,
+            project_id,
+            body.markdown,
+            docs_root=docs,
+            source_name=body.source_name,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ProjectPrdOut(**result)
+
+
+@router.post("/projects/{project_id}/reindex", response_model=ProjectPrdOut)
+def projects_reindex(
+    project_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> ProjectPrdOut:
+    try:
+        docs = _prd_docs_root(settings)
+        result = sprint_svc.reindex_prd(db, project_id, docs_root=docs)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ProjectPrdOut(**result)
+
+
+@router.get("/projects/{project_id}/sprints", response_model=list[SprintOut])
+def projects_sprints(project_id: uuid.UUID, db: Session = Depends(get_db)) -> list[Sprint]:
+    if db.get(Project, project_id) is None:
+        raise HTTPException(status_code=404, detail="project not found")
+    return sprint_svc.list_sprints(db, project_id)
+
+
+@router.post("/projects/{project_id}/sprints/propose", response_model=SprintOut)
+def projects_propose_sprint(
+    project_id: uuid.UUID,
+    body: SprintProposeIn,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> Sprint:
+    try:
+        return sprint_svc.propose_sprint(
+            db,
+            effective_settings(settings),
+            project_id,
+            capacity_hours=body.capacity_hours,
+            mode=body.mode or "hours",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/sprints/{sprint_id}", response_model=SprintDetailOut)
+def sprint_get(sprint_id: uuid.UUID, db: Session = Depends(get_db)) -> SprintDetailOut:
+    try:
+        hier = sprint_svc.sprint_hierarchy(db, sprint_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    epics_out = []
+    for block in hier["epics"]:
+        epics_out.append(
+            {
+                "epic": EpicOut.model_validate(block["epic"]).model_dump(mode="json"),
+                "tasks": [TaskOut.model_validate(t).model_dump(mode="json") for t in block["tasks"]],
+            }
+        )
+    return SprintDetailOut(
+        sprint=SprintOut.model_validate(hier["sprint"]),
+        epics=epics_out,
+        ungrouped_tasks=[TaskOut.model_validate(t) for t in hier["ungrouped_tasks"]],
+    )
+
+
+@router.post("/sprints/{sprint_id}/kickoff", response_model=SprintKickoffOut)
+def sprint_kickoff(sprint_id: uuid.UUID, db: Session = Depends(get_db)) -> SprintKickoffOut:
+    try:
+        result = sprint_svc.kickoff_sprint(db, sprint_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return SprintKickoffOut(**result)
+
+
+@router.post("/sprints/{sprint_id}/pause", response_model=SprintPauseOut)
+def sprint_pause(sprint_id: uuid.UUID, db: Session = Depends(get_db)) -> SprintPauseOut:
+    try:
+        result = sprint_svc.pause_sprint(db, sprint_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return SprintPauseOut(**result)
+
+
+@router.post("/sprints/{sprint_id}/resume", response_model=SprintKickoffOut)
+def sprint_resume(sprint_id: uuid.UUID, db: Session = Depends(get_db)) -> SprintKickoffOut:
+    try:
+        result = sprint_svc.resume_sprint(db, sprint_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return SprintKickoffOut(**result)
 
 
 @router.get("/tasks/{task_id}", response_model=TaskOut)
@@ -202,12 +392,20 @@ def prd_index(
     body: PrdIndexIn,
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
+    project_id: uuid.UUID | None = Query(None),
 ) -> PrdIndexOut:
+    """Legacy global index; prefer POST /projects/{id}/prd. Optional project_id scopes modules."""
     try:
         docs = _prd_docs_root(settings)
-        products = index_prd_markdown(
-            db, body.markdown, docs_root=docs, source_name=body.source_name
-        )
+        if project_id:
+            sprint_svc.upload_prd(
+                db, project_id, body.markdown, docs_root=docs, source_name=body.source_name
+            )
+            products = list_products(db, project_id=project_id)
+        else:
+            products = index_prd_markdown(
+                db, body.markdown, docs_root=docs, source_name=body.source_name
+            )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return PrdIndexOut(products=products)
@@ -311,12 +509,7 @@ async def events_stream(
     )
 
 
-@router.get("/hitl", response_model=list[HumanItemOut])
-def list_hitl(
-    db: Session = Depends(get_db),
-    status: str | None = Query("open"),
-) -> list[HumanItem]:
-    # Ensure blocked_human tasks have an open HITL row so reply can unblock them
+def _ensure_blocked_hitl(db: Session) -> None:
     blocked = list(
         db.scalars(select(Task).where(Task.state == TaskState.blocked_human.value).limit(50))
     )
@@ -337,6 +530,8 @@ def list_hitl(
                 id=uuid.uuid4(),
                 task_id=task.id,
                 product_id=task.product_id,
+                project_id=task.project_id,
+                sprint_id=task.sprint_id,
                 kind="blocked_task",
                 summary=task.error or task.title,
                 status="open",
@@ -346,10 +541,85 @@ def list_hitl(
     if created:
         db.commit()
 
+
+@router.get("/hitl")
+def list_hitl(
+    db: Session = Depends(get_db),
+    status: str | None = Query("open"),
+    group: str | None = Query(None, description="Set to 'tree' for project→sprint nesting"),
+):
+    _ensure_blocked_hitl(db)
     q = select(HumanItem).order_by(HumanItem.created_at.desc())
     if status:
         q = q.where(HumanItem.status == status)
-    return list(db.scalars(q.limit(100)))
+    items = list(db.scalars(q.limit(200)))
+
+    if group != "tree":
+        return [HumanItemOut.model_validate(i) for i in items]
+
+    # Tree: project → sprint → items
+    projects = {p.id: p for p in db.scalars(select(Project)).all()}
+    sprints = {s.id: s for s in db.scalars(select(Sprint)).all()}
+    tree: dict[str, dict] = {}
+    for item in items:
+        pid = str(item.project_id) if item.project_id else "none"
+        if pid not in tree:
+            proj = projects.get(item.project_id) if item.project_id else None
+            tree[pid] = {
+                "project_id": item.project_id,
+                "project_title": proj.title if proj else "Unscoped",
+                "sprints": {},
+            }
+        sid = str(item.sprint_id) if item.sprint_id else "none"
+        snode = tree[pid]["sprints"]
+        if sid not in snode:
+            sp = sprints.get(item.sprint_id) if item.sprint_id else None
+            label = (
+                f"{sp.mode} · {sp.status}"
+                if sp
+                else "No sprint"
+            )
+            snode[sid] = {
+                "sprint_id": item.sprint_id,
+                "sprint_label": label,
+                "items": [],
+            }
+        snode[sid]["items"].append(item)
+
+    out_projects: list[HitlProjectNode] = []
+    for node in tree.values():
+        sprint_nodes = []
+        total = 0
+        for sn in node["sprints"].values():
+            total += len(sn["items"])
+            sprint_nodes.append(
+                HitlSprintNode(
+                    sprint_id=sn["sprint_id"],
+                    sprint_label=sn["sprint_label"],
+                    count=len(sn["items"]),
+                    items=[
+                        HitlTreeItem(
+                            id=i.id,
+                            kind=i.kind,
+                            summary=i.summary,
+                            status=i.status,
+                            task_id=i.task_id,
+                            needed_by=i.needed_by,
+                            created_at=i.created_at,
+                        )
+                        for i in sn["items"]
+                    ],
+                )
+            )
+        out_projects.append(
+            HitlProjectNode(
+                project_id=node["project_id"],
+                project_title=node["project_title"],
+                count=total,
+                sprints=sprint_nodes,
+            )
+        )
+    return HitlTreeOut(projects=out_projects)
 
 
 @router.post("/hitl", response_model=HumanItemOut, status_code=201)
@@ -357,6 +627,8 @@ def create_hitl(body: HumanItemCreate, db: Session = Depends(get_db)) -> HumanIt
     item = HumanItem(
         id=uuid.uuid4(),
         product_id=body.product_id,
+        project_id=body.project_id,
+        sprint_id=body.sprint_id,
         task_id=body.task_id,
         kind=body.kind,
         summary=body.summary,
@@ -413,6 +685,7 @@ def reply_hitl(
 def eod_digest(
     db: Session = Depends(get_db),
     day: str | None = Query(None, description="ISO date YYYY-MM-DD; default today"),
+    project_id: uuid.UUID | None = Query(None),
 ) -> EodDigestOut:
     target = day or date.today().isoformat()
     try:
@@ -423,25 +696,25 @@ def eod_digest(
     start = datetime(day_date.year, day_date.month, day_date.day, tzinfo=timezone.utc)
     end = start + timedelta(days=1)
 
-    rows = db.execute(
-        select(Task.state, func.count()).group_by(Task.state)
-    ).all()
+    task_q = select(Task.state, func.count()).group_by(Task.state)
+    if project_id:
+        task_q = select(Task.state, func.count()).where(Task.project_id == project_id).group_by(Task.state)
+    rows = db.execute(task_q).all()
     counts = {str(state): int(n) for state, n in rows}
 
     spend = float(daily_spend_usd(db))
-    # Prefer event cost sum for the day when available
-    event_spend = db.scalar(
-        select(func.coalesce(func.sum(Event.cost_usd), 0)).where(
-            Event.ts >= start, Event.ts < end
-        )
+    event_spend_q = select(func.coalesce(func.sum(Event.cost_usd), 0)).where(
+        Event.ts >= start, Event.ts < end
     )
+    event_spend = db.scalar(event_spend_q)
     if event_spend is not None and float(event_spend) > 0:
         spend = float(event_spend)
 
-    open_hitl = (
-        db.scalar(select(func.count()).select_from(HumanItem).where(HumanItem.status == "open"))
-        or 0
-    )
+    hitl_q = select(func.count()).select_from(HumanItem).where(HumanItem.status == "open")
+    if project_id:
+        hitl_q = hitl_q.where(HumanItem.project_id == project_id)
+    open_hitl = db.scalar(hitl_q) or 0
+
     recent = list(
         db.scalars(
             select(Event)
@@ -450,6 +723,67 @@ def eod_digest(
             .limit(40)
         )
     )
+
+    # Sessions (runs) for the day, optionally scoped via task.project_id
+    runs_q = (
+        select(Run, Task)
+        .join(Task, Run.task_id == Task.id)
+        .where(Run.started_at >= start, Run.started_at < end)
+        .order_by(Run.started_at.desc())
+        .limit(100)
+    )
+    if project_id:
+        runs_q = runs_q.where(Task.project_id == project_id)
+    run_rows = db.execute(runs_q).all()
+    sessions: list[EodSessionOut] = []
+    agent_acc: dict[str, dict] = {}
+    for run, task in run_rows:
+        dur = None
+        if run.ended_at and run.started_at:
+            dur = (run.ended_at - run.started_at).total_seconds()
+        sessions.append(
+            EodSessionOut(
+                run_id=run.id,
+                task_id=task.id,
+                task_title=task.title,
+                role=run.role,
+                model=run.model,
+                status=run.status,
+                cost_usd=float(run.cost_usd or 0),
+                tokens_in=int(run.tokens_in or 0),
+                tokens_out=int(run.tokens_out or 0),
+                started_at=run.started_at,
+                ended_at=run.ended_at,
+                duration_sec=dur,
+            )
+        )
+        key = run.role
+        acc = agent_acc.setdefault(key, {"role": key, "runs": 0, "cost_usd": 0.0, "duration_sec": 0.0})
+        acc["runs"] += 1
+        acc["cost_usd"] += float(run.cost_usd or 0)
+        acc["duration_sec"] += dur or 0
+
+    # Hierarchy for project that day: sprints with tasks touched
+    hierarchy: list[dict] = []
+    if project_id:
+        sprints = sprint_svc.list_sprints(db, project_id)
+        for sp in sprints:
+            hier = sprint_svc.sprint_hierarchy(db, sp.id)
+            hierarchy.append(
+                {
+                    "sprint": SprintOut.model_validate(hier["sprint"]).model_dump(mode="json"),
+                    "epics": [
+                        {
+                            "epic": EpicOut.model_validate(b["epic"]).model_dump(mode="json"),
+                            "tasks": [
+                                TaskOut.model_validate(t).model_dump(mode="json") for t in b["tasks"]
+                            ],
+                        }
+                        for b in hier["epics"]
+                    ],
+                }
+            )
+
     risks: list[str] = []
     if counts.get(TaskState.blocked_human.value, 0) or open_hitl:
         risks.append(f"{counts.get(TaskState.blocked_human.value, 0)} blocked + {open_hitl} open HITL")
@@ -462,6 +796,7 @@ def eod_digest(
 
     return EodDigestOut(
         day=target,
+        project_id=project_id,
         counts_by_state=counts,
         merged=counts.get(TaskState.merged.value, 0),
         reviewing=counts.get(TaskState.reviewing.value, 0),
@@ -472,4 +807,106 @@ def eod_digest(
         open_hitl=int(open_hitl),
         recent_events=[EventOut.model_validate(e) for e in recent],
         risks=risks,
+        sessions=sessions,
+        agents=list(agent_acc.values()),
+        hierarchy=hierarchy,
+    )
+
+
+@router.get("/usage", response_model=UsageOut)
+def usage_report(
+    db: Session = Depends(get_db),
+    from_day: str | None = Query(None, alias="from"),
+    to_day: str | None = Query(None, alias="to"),
+    project_id: uuid.UUID | None = None,
+    sprint_id: uuid.UUID | None = None,
+    epic_id: uuid.UUID | None = None,
+    task_id: uuid.UUID | None = None,
+    group_by: str = Query("day", description="day|project|sprint|epic|task|run|role|model"),
+) -> UsageOut:
+    q = select(Run, Task).join(Task, Run.task_id == Task.id)
+    if from_day:
+        try:
+            start = datetime.fromisoformat(from_day).replace(tzinfo=timezone.utc)
+        except ValueError:
+            start = datetime.fromisoformat(from_day + "T00:00:00").replace(tzinfo=timezone.utc)
+        q = q.where(Run.started_at >= start)
+    if to_day:
+        try:
+            end = datetime.fromisoformat(to_day).replace(tzinfo=timezone.utc) + timedelta(days=1)
+        except ValueError:
+            end = datetime.fromisoformat(to_day + "T00:00:00").replace(tzinfo=timezone.utc) + timedelta(
+                days=1
+            )
+        q = q.where(Run.started_at < end)
+    if project_id:
+        q = q.where(Task.project_id == project_id)
+    if sprint_id:
+        q = q.where(Task.sprint_id == sprint_id)
+    if epic_id:
+        q = q.where(Task.epic_id == epic_id)
+    if task_id:
+        q = q.where(Task.id == task_id)
+
+    rows = db.execute(q.order_by(Run.started_at.desc()).limit(2000)).all()
+    buckets: dict[str, UsageBucket] = {}
+    model_totals: dict[str, float] = {}
+    total_cost = 0.0
+    total_in = 0
+    total_out = 0
+
+    for run, task in rows:
+        cost = float(run.cost_usd or 0)
+        tin = int(run.tokens_in or 0)
+        tout = int(run.tokens_out or 0)
+        total_cost += cost
+        total_in += tin
+        total_out += tout
+        model = run.model or "unknown"
+        model_totals[model] = model_totals.get(model, 0.0) + cost
+
+        if group_by == "project":
+            key = str(task.project_id or "none")
+            label = key
+        elif group_by == "sprint":
+            key = str(task.sprint_id or "none")
+            label = key
+        elif group_by == "epic":
+            key = str(task.epic_id or "none")
+            label = task.parent_epic or key
+        elif group_by == "task":
+            key = str(task.id)
+            label = task.title
+        elif group_by == "run":
+            key = str(run.id)
+            label = f"{task.title} · {run.role}"
+        elif group_by == "role" or group_by == "agent":
+            key = run.role
+            label = run.role
+        elif group_by == "model":
+            key = model
+            label = model
+        else:  # day
+            key = (run.started_at or datetime.now(timezone.utc)).date().isoformat()
+            label = key
+
+        b = buckets.get(key)
+        if not b:
+            b = UsageBucket(key=key, label=label, cost_usd=0, tokens_in=0, tokens_out=0, run_count=0, models={})
+            buckets[key] = b
+        b.cost_usd += cost
+        b.tokens_in += tin
+        b.tokens_out += tout
+        b.run_count += 1
+        b.models[model] = b.models.get(model, 0.0) + cost
+
+    return UsageOut(
+        from_day=from_day,
+        to_day=to_day,
+        group_by=group_by,
+        total_cost_usd=total_cost,
+        total_tokens_in=total_in,
+        total_tokens_out=total_out,
+        buckets=list(buckets.values()),
+        model_totals=model_totals,
     )

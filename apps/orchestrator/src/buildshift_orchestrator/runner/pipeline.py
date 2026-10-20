@@ -394,8 +394,11 @@ def _run_stage(db: Session, settings: Settings, task: Task, role: str) -> None:
                 else:
                     task.stage = "implementer"
                     task.role = "implementer"
-                    task.state = TaskState.ready.value
                     task.error = "reviewer requested changes"
+                    from buildshift_orchestrator.planning.sprints import park_task_for_sprint_pause
+
+                    if not park_task_for_sprint_pause(db, task, role):
+                        task.state = TaskState.ready.value
                 emit(
                     db,
                     kind="task.review",
@@ -404,6 +407,15 @@ def _run_stage(db: Session, settings: Settings, task: Task, role: str) -> None:
                     status=task.state,
                     summary=f"Review verdict: {verdict}",
                 )
+                db.commit()
+                return
+            from buildshift_orchestrator.planning.sprints import park_task_for_sprint_pause
+
+            if park_task_for_sprint_pause(db, task, role):
+                # Review done; integrate on resume rather than starting a new heavy step mid-pause
+                task.stage = "reviewer"
+                task.role = "reviewer"
+                task.review_verdict = verdict
                 db.commit()
                 return
             _integrate(
@@ -418,23 +430,36 @@ def _run_stage(db: Session, settings: Settings, task: Task, role: str) -> None:
             )
             return
 
-        # Advance to next stage
+        # Advance to next stage (or park if sprint is gracefully pausing)
         idx = STAGE_ORDER.index(role)
         if idx + 1 < len(STAGE_ORDER):
             nxt = STAGE_ORDER[idx + 1]
             task.stage = nxt
             task.role = nxt
-            task.state = TaskState.ready.value
             task.attempts = 0  # per-stage attempts reset
-            emit(
-                db,
-                kind="task.stage_done",
-                task_id=task.id,
-                role=role,
-                status="ready",
-                summary=f"Advance to {nxt}",
-            )
-            db.commit()
+            from buildshift_orchestrator.planning.sprints import park_task_for_sprint_pause
+
+            if park_task_for_sprint_pause(db, task, role):
+                emit(
+                    db,
+                    kind="task.stage_done",
+                    task_id=task.id,
+                    role=role,
+                    status="paused",
+                    summary=f"Stage {role} done; sprint pause — holding before {nxt}",
+                )
+                db.commit()
+            else:
+                task.state = TaskState.ready.value
+                emit(
+                    db,
+                    kind="task.stage_done",
+                    task_id=task.id,
+                    role=role,
+                    status="ready",
+                    summary=f"Advance to {nxt}",
+                )
+                db.commit()
         else:
             _integrate(
                 db,

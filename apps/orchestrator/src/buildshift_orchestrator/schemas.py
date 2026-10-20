@@ -36,7 +36,12 @@ class TaskOut(BaseModel):
     error: str | None
     plan_id: uuid.UUID | None = None
     product_id: uuid.UUID | None = None
+    project_id: uuid.UUID | None = None
+    sprint_id: uuid.UUID | None = None
+    epic_id: uuid.UUID | None = None
+    parent_epic: str | None = None
     review_verdict: str | None = None
+    pause_notes: str | None = None
     created_at: datetime
     updated_at: datetime
     finished_at: datetime | None
@@ -65,6 +70,7 @@ class PrdIndexIn(BaseModel):
 
 class PrdProductOut(BaseModel):
     id: uuid.UUID
+    project_id: uuid.UUID | None = None
     slug: str
     title: str
     summary: str
@@ -73,6 +79,146 @@ class PrdProductOut(BaseModel):
     source_path: str | None = None
 
     model_config = {"from_attributes": True}
+
+
+class ProjectCreate(BaseModel):
+    title: str
+    slug: str | None = None
+
+
+class ProjectOut(BaseModel):
+    id: uuid.UUID
+    slug: str
+    title: str
+    status: str
+    prd_path: str | None = None
+    has_prd: bool = False
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ProjectDetailOut(BaseModel):
+    project: ProjectOut
+    modules: list[PrdProductOut]
+    sprint_count: int
+    open_hitl: int
+
+
+class ProjectPrdIn(BaseModel):
+    markdown: str
+    source_name: str = "uploaded.md"
+
+
+class ProjectPrdOut(BaseModel):
+    project_id: str
+    modules: int
+    module_ids: list[str]
+
+
+class SprintProposeIn(BaseModel):
+    """How large a sprint to plan. capacity_hours is a ceiling (1–40); work is not padded."""
+
+    capacity_hours: float = 6.0
+    mode: str = "hours"  # reserved; sizing is driven by capacity_hours
+
+
+class SprintOut(BaseModel):
+    id: uuid.UUID
+    project_id: uuid.UUID
+    mode: str
+    status: str
+    capacity_hours: Decimal
+    goals: list
+    estimated_spend_usd: Decimal
+    estimated_hours: Decimal
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class EpicOut(BaseModel):
+    id: uuid.UUID
+    sprint_id: uuid.UUID
+    project_id: uuid.UUID
+    product_id: uuid.UUID | None = None
+    title: str
+    status: str
+    sort_order: int
+
+    model_config = {"from_attributes": True}
+
+
+class SprintDetailOut(BaseModel):
+    sprint: SprintOut
+    epics: list[dict]
+    ungrouped_tasks: list[TaskOut] = Field(default_factory=list)
+
+
+class SprintKickoffOut(BaseModel):
+    sprint_id: str
+    status: str
+    task_ids: list[str]
+    task_count: int
+
+
+class SprintPauseOut(BaseModel):
+    sprint_id: str
+    status: str
+    inflight: int
+    message: str
+
+
+class HitlTreeItem(BaseModel):
+    id: uuid.UUID
+    kind: str
+    summary: str
+    status: str
+    task_id: uuid.UUID | None = None
+    needed_by: str | None = None
+    created_at: datetime
+
+
+class HitlSprintNode(BaseModel):
+    sprint_id: uuid.UUID | None
+    sprint_label: str
+    count: int
+    items: list[HitlTreeItem]
+
+
+class HitlProjectNode(BaseModel):
+    project_id: uuid.UUID | None
+    project_title: str
+    count: int
+    sprints: list[HitlSprintNode]
+
+
+class HitlTreeOut(BaseModel):
+    projects: list[HitlProjectNode]
+
+
+class UsageBucket(BaseModel):
+    key: str
+    label: str
+    cost_usd: float
+    tokens_in: int = 0
+    tokens_out: int = 0
+    run_count: int = 0
+    models: dict[str, float] = Field(default_factory=dict)
+
+
+class UsageOut(BaseModel):
+    from_day: str | None = None
+    to_day: str | None = None
+    group_by: str
+    total_cost_usd: float
+    total_tokens_in: int
+    total_tokens_out: int
+    buckets: list[UsageBucket]
+    model_totals: dict[str, float] = Field(default_factory=dict)
 
 
 class PrdIndexOut(BaseModel):
@@ -130,6 +276,8 @@ class EventOut(BaseModel):
 class HumanItemOut(BaseModel):
     id: uuid.UUID
     product_id: uuid.UUID | None = None
+    project_id: uuid.UUID | None = None
+    sprint_id: uuid.UUID | None = None
     task_id: uuid.UUID | None = None
     kind: str
     summary: str
@@ -148,6 +296,8 @@ class HumanItemCreate(BaseModel):
     needed_by: str | None = None
     task_id: uuid.UUID | None = None
     product_id: uuid.UUID | None = None
+    project_id: uuid.UUID | None = None
+    sprint_id: uuid.UUID | None = None
 
 
 class HumanItemReplyIn(BaseModel):
@@ -182,8 +332,24 @@ class RuntimeSettingsIn(BaseModel):
     ui: dict | None = None
 
 
+class EodSessionOut(BaseModel):
+    run_id: uuid.UUID
+    task_id: uuid.UUID
+    task_title: str
+    role: str
+    model: str | None
+    status: str
+    cost_usd: float
+    tokens_in: int
+    tokens_out: int
+    started_at: datetime | None
+    ended_at: datetime | None
+    duration_sec: float | None = None
+
+
 class EodDigestOut(BaseModel):
     day: str
+    project_id: uuid.UUID | None = None
     counts_by_state: dict[str, int]
     merged: int
     reviewing: int
@@ -194,3 +360,6 @@ class EodDigestOut(BaseModel):
     open_hitl: int
     recent_events: list[EventOut]
     risks: list[str]
+    sessions: list[EodSessionOut] = Field(default_factory=list)
+    agents: list[dict] = Field(default_factory=list)
+    hierarchy: list[dict] = Field(default_factory=list)

@@ -89,6 +89,8 @@ export type CabinPermanent = {
 export type DeskPlacement = { seat: number; x: number; y: number };
 export type SofaPlacement = { id: string; x: number; y: number; orient: "h" | "v" };
 
+export type DoorPlacement = { x: number; y: number };
+
 export type CabinDef = {
   id: string;
   label: string;
@@ -103,6 +105,8 @@ export type CabinDef = {
   hireStates?: string[];
   desks: DeskPlacement[];
   sofas?: SofaPlacement[];
+  /** Hire/fire gate for dynamic cabins */
+  door?: DoorPlacement;
   /** @deprecated grid fallback */
   deskRows?: number;
   deskCols?: number;
@@ -133,7 +137,7 @@ export type AgentInfo = {
   name: string;
   role: string;
   cabinId: string;
-  status: "idle" | "working" | "roaming" | "hired" | "sitting" | "chatting";
+  status: "idle" | "working" | "roaming" | "hired" | "sitting" | "chatting" | "called";
   taskId?: string | null;
   taskTitle?: string | null;
   permanent: boolean;

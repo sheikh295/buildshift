@@ -45,6 +45,7 @@
       "maxHire": 9,
       "hireRoles": ["implementer"],
       "hireStates": ["ready", "coding"],
+      "door": { "x": 300, "y": 78 },
       "desks": [
         { "seat": 0, "x": 395, "y": 200 },
         { "seat": 1, "x": 505, "y": 200 },
@@ -73,6 +74,7 @@
       "maxHire": 6,
       "hireRoles": ["test_author", "reviewer"],
       "hireStates": ["test_authoring", "testing", "reviewing"],
+      "door": { "x": 980, "y": 78 },
       "desks": [
         { "seat": 0, "x": 825, "y": 200 },
         { "seat": 1, "x": 935, "y": 200 },

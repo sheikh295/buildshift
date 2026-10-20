@@ -113,6 +113,23 @@ export function ensureOfficeTextures(scene: Phaser.Scene) {
   rug.generateTexture("rug", 64, 40);
   rug.destroy();
 
+  // Department hire gate (door frame — place at cabin top corner)
+  const door = scene.make.graphics({ x: 0, y: 0 }, false);
+  door.fillStyle(0x0c1018, 1);
+  door.fillRect(0, 0, 48, 36);
+  door.fillStyle(0x1a2230, 1);
+  door.fillRect(3, 2, 42, 32);
+  door.fillStyle(0x2a4060, 1);
+  door.fillRect(6, 4, 36, 28);
+  door.fillStyle(0x5b9cff, 0.9);
+  door.fillRect(8, 6, 14, 24);
+  door.fillRect(26, 6, 14, 24);
+  door.fillStyle(0xf5f0e1, 1);
+  door.fillCircle(21, 18, 2);
+  door.fillCircle(27, 18, 2);
+  door.generateTexture("door_gate", 48, 36);
+  door.destroy();
+
   // Task token
   const ticket = scene.make.graphics({ x: 0, y: 0 }, false);
   ticket.fillStyle(0xf5f0e1, 1);

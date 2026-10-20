@@ -6,6 +6,8 @@ Upload a product requirements document (PRD). Buildshift plans work in time-boxe
 
 You approve plans and handle secrets, billing, and publishing. Agents never touch `main` without your merge queue.
 
+![Buildshift Operations Hall — live office floor](docs/images/office-operations-hall.png)
+
 License: [Apache-2.0](LICENSE)
 
 ---

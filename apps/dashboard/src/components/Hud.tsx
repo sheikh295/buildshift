@@ -228,6 +228,8 @@ function ProjectsPanel({
   const [title, setTitle] = useState("");
   const [markdown, setMarkdown] = useState("");
   const [sourceName, setSourceName] = useState("prd.md");
+  const [repoUrl, setRepoUrl] = useState("");
+  const [repoBranch, setRepoBranch] = useState("main");
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
@@ -238,7 +240,10 @@ function ProjectsPanel({
     const id = prefer || projectId || list[0]?.id || "";
     if (id) {
       onSelect(id);
-      setDetail(await orch.project(id));
+      const d = await orch.project(id);
+      setDetail(d);
+      setRepoUrl(d.project.repo_url || "");
+      setRepoBranch(d.project.repo_branch || "main");
     } else setDetail(null);
   };
 
@@ -251,7 +256,11 @@ function ProjectsPanel({
     if (!projectId) return;
     orch
       .project(projectId)
-      .then(setDetail)
+      .then((d) => {
+        setDetail(d);
+        setRepoUrl(d.project.repo_url || "");
+        setRepoBranch(d.project.repo_branch || "main");
+      })
       .catch((e) => setErr(String(e)));
   }, [projectId]);
 
@@ -292,8 +301,84 @@ function ProjectsPanel({
         <>
           <p className="muted">
             {detail.modules.length} modules · {detail.sprint_count} sprints · {detail.open_hitl} open
-            HITL · PRD {detail.project.has_prd ? "uploaded" : "missing"}
+            HITL · PRD {detail.project.has_prd ? "uploaded" : "missing"} · repo{" "}
+            {detail.project.has_repo ? "connected" : "not set"}
           </p>
+          <fieldset>
+            <legend>Git repository</legend>
+            <p className="muted">
+              Workers clone this remote into a local mirror under{" "}
+              <code>data/repos/{detail.project.slug}</code>, then each task gets an isolated
+              checkout. Use a GitHub URL or an absolute path to a local git repo.
+            </p>
+            <label>
+              Clone URL / path
+              <input
+                value={repoUrl}
+                onChange={(e) => setRepoUrl(e.target.value)}
+                placeholder="https://github.com/org/app.git or /path/to/repo"
+              />
+            </label>
+            <label>
+              Base branch
+              <input value={repoBranch} onChange={(e) => setRepoBranch(e.target.value)} />
+            </label>
+            {detail.project.repo_path && (
+              <p className="muted">
+                Mirror: <code>{detail.project.repo_path}</code>
+                {detail.project.repo_synced_at
+                  ? ` · synced ${new Date(detail.project.repo_synced_at).toLocaleString()}`
+                  : ""}
+              </p>
+            )}
+            <div className="row">
+              <button
+                type="button"
+                disabled={!projectId || !repoUrl.trim() || busy}
+                onClick={async () => {
+                  setBusy(true);
+                  setErr("");
+                  try {
+                    const p = await orch.connectRepo(
+                      projectId,
+                      repoUrl.trim(),
+                      repoBranch.trim() || "main",
+                      true
+                    );
+                    setMsg(`Repo connected · ${p.repo_path || "ok"}`);
+                    setDetail(await orch.project(projectId));
+                    onChange();
+                  } catch (e) {
+                    setErr(String(e));
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                Connect &amp; sync
+              </button>
+              <button
+                type="button"
+                disabled={!projectId || !detail.project.has_repo || busy}
+                onClick={async () => {
+                  setBusy(true);
+                  setErr("");
+                  try {
+                    const p = await orch.syncRepo(projectId);
+                    setMsg(`Synced · ${p.repo_path || "ok"}`);
+                    setDetail(await orch.project(projectId));
+                    onChange();
+                  } catch (e) {
+                    setErr(String(e));
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                Sync now
+              </button>
+            </div>
+          </fieldset>
           {detail.modules.length > 0 && (
             <ul className="tree">
               {detail.modules.map((m) => (

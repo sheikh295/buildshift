@@ -78,6 +78,11 @@ export type Project = {
   status: string;
   prd_path?: string | null;
   has_prd?: boolean;
+  repo_url?: string | null;
+  repo_branch?: string;
+  repo_path?: string | null;
+  repo_synced_at?: string | null;
+  has_repo?: boolean;
   created_at?: string;
   updated_at?: string;
 };

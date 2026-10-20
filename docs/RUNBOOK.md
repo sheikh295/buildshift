@@ -75,15 +75,29 @@ curl -s -X POST http://127.0.0.1:8080/plans/<plan_id>/approve
 
 Role → model routing is edited in the office **Control** panel (seeded from `apps/orchestrator/config/router.yaml`; aliases must exist in `services/litellm/config.yaml`).
 
+### Per-project git repo
+
+In the office **Projects** tab (or API), connect each project to a clone URL or absolute local path:
+
+```bash
+curl -s -X PUT http://127.0.0.1:8080/projects/<project_id>/repo \
+  -H "authorization: Bearer $OPERATOR_TOKEN" -H 'content-type: application/json' \
+  -d '{"repo_url":"https://github.com/org/app.git","repo_branch":"main","sync":true}'
+curl -s -X POST http://127.0.0.1:8080/projects/<project_id>/repo/sync \
+  -H "authorization: Bearer $OPERATOR_TOKEN"
+```
+
+Mirror lands at `./data/repos/{slug}`. Task checkouts are `./data/worktrees/{task-id}`. Workers mount `HOST_DATA_DIR` and run with cwd = that checkout.
+
 ### Merge queue
 
 After reviewer approval the orchestrator, under a single-flight lock:
 
-1. Rebases the task branch onto the proving base
+1. Rebases the task branch onto the **project** base branch (or global proving base)
 2. Runs local CI (`python -m unittest discover -s tests`)
-3. Lands on base (local bare fast-forward, or GitHub PR + merge when tokenized)
+3. Lands on base (local mirror fast-forward, or GitHub PR + merge when tokenized)
 
-`merged` means the change is on the proving base tip — not merely that a PR was opened. `make smoke-merge-queue` indexes [`fixtures/sample-prd-12.md`](../fixtures/sample-prd-12.md), approves 12 tickets, and asserts each owned path exists on `main`.
+`merged` means the change is on that base tip — not merely that a PR was opened. `make smoke-merge-queue` indexes [`fixtures/sample-prd-12.md`](../fixtures/sample-prd-12.md), approves 12 tickets, and asserts each owned path exists on `main`.
 
 Enqueue an ad-hoc task:
 
@@ -108,8 +122,8 @@ make up
 ## Data locations
 
 - Compose volume `postgres_data` — orchestrator state
-- `./data/repos` — clones
-- `./data/worktrees` — ephemeral (cleaned after tasks)
+- `./data/repos/{slug}` — per-project git mirrors (plus `proving` / `demo-app` fallback)
+- `./data/worktrees/{task-id}` — ephemeral task checkouts (cleaned after tasks)
 - `./data/remotes` — local bare remote for `fixtures/demo-app`
 
 ## Tear down completely

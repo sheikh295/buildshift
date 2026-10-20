@@ -70,6 +70,7 @@ from buildshift_orchestrator.schemas import (
     ProjectOut,
     ProjectPrdIn,
     ProjectPrdOut,
+    ProjectRepoIn,
     RuntimeSettingsIn,
     RuntimeSettingsOut,
     SprintDetailOut,
@@ -177,6 +178,11 @@ def _project_out(p: Project) -> ProjectOut:
         status=p.status,
         prd_path=p.prd_path,
         has_prd=bool((p.prd_markdown or "").strip() or p.prd_path),
+        repo_url=p.repo_url,
+        repo_branch=p.repo_branch or "main",
+        repo_path=p.repo_path,
+        repo_synced_at=p.repo_synced_at,
+        has_repo=bool((p.repo_url or "").strip()),
         created_at=p.created_at,
         updated_at=p.updated_at,
     )
@@ -210,6 +216,42 @@ def projects_get(project_id: uuid.UUID, db: Session = Depends(get_db)) -> Projec
     )
 
 
+@router.put("/projects/{project_id}/repo", response_model=ProjectOut)
+def projects_connect_repo(
+    project_id: uuid.UUID,
+    body: ProjectRepoIn,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> ProjectOut:
+    """Connect (and optionally clone/sync) the git repo this project works in."""
+    try:
+        p = sprint_svc.connect_project_repo(
+            db,
+            project_id,
+            repo_url=body.repo_url,
+            repo_branch=body.repo_branch,
+            sync=body.sync,
+            settings=effective_settings(settings),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _project_out(p)
+
+
+@router.post("/projects/{project_id}/repo/sync", response_model=ProjectOut)
+def projects_sync_repo(
+    project_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> ProjectOut:
+    """Fetch/reset the project's local mirror from its configured remote."""
+    try:
+        p = sprint_svc.sync_project_repo(db, project_id, effective_settings(settings))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _project_out(p)
+
+
 @router.post("/projects/{project_id}/prd", response_model=ProjectPrdOut)
 def projects_upload_prd(
     project_id: uuid.UUID,
@@ -218,7 +260,7 @@ def projects_upload_prd(
     settings: Settings = Depends(get_settings),
 ) -> ProjectPrdOut:
     try:
-        docs = _prd_docs_root(settings)
+        docs = _prd_docs_root(settings, project_id=project_id, db=db)
         result = sprint_svc.upload_prd(
             db,
             project_id,
@@ -238,7 +280,7 @@ def projects_reindex(
     settings: Settings = Depends(get_settings),
 ) -> ProjectPrdOut:
     try:
-        docs = _prd_docs_root(settings)
+        docs = _prd_docs_root(settings, project_id=project_id, db=db)
         result = sprint_svc.reindex_prd(db, project_id, docs_root=docs)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -376,9 +418,28 @@ def put_settings_api(body: RuntimeSettingsIn, db: Session = Depends(get_db)) -> 
     return _settings_out(db, blob)
 
 
-def _prd_docs_root(settings: Settings) -> Path:
-    """Write indexed PRD markdown under the proving clone's docs/prd."""
+def _prd_docs_root(
+    settings: Settings,
+    *,
+    project_id: uuid.UUID | None = None,
+    db: Session | None = None,
+) -> Path:
+    """Write indexed PRD markdown under the project's (or global proving) clone docs/prd."""
     eff = effective_settings(settings)
+    project: Project | None = None
+    if project_id is not None and db is not None:
+        project = db.get(Project, project_id)
+    if project is not None and (project.repo_url or "").strip():
+        mirror = (
+            Path(project.repo_path)
+            if project.repo_path
+            else sprint_svc.project_mirror_path(eff, project)
+        )
+        gitops.ensure_repo(
+            project.repo_url.strip(), mirror, project.repo_branch or "main"
+        )
+        return mirror / "docs" / "prd"
+
     clone_url = resolve_clone_url(eff)
     repos_dir = eff.data_dir / "repos"
     repo_name = "proving" if eff.proving_repo_url else "demo-app"

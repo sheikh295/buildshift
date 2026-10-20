@@ -109,9 +109,20 @@ Use **Pause** / **Resume** when you need to stop new work without aborting mid-s
 - **Usage** — spend and model mix over a range.
 - **Control** — budgets, models, harness, kill switch, proving repo.
 
-### 4. Where code lands
+### 4. Connect each project's git repo
 
-Workers push branches and the merge queue lands onto your **proving** repository (local bare repo by default, or a real remote when `PROVING_REPO_URL` / `GITHUB_TOKEN` are set). `merged` means the change is on the proving base tip.
+Every **Project** needs its own repository. In **Projects → Git repository**, set a clone URL (GitHub HTTPS/SSH) or an absolute path to a local git checkout, plus the base branch. Buildshift:
+
+1. Clones/fetches into a **local mirror** at `$DATA_DIR/repos/{project-slug}` on the host
+2. For each task, creates an **isolated checkout** under `$DATA_DIR/worktrees/{task-id}`
+3. Runs the worker **container** with that checkout mounted (`HOST_DATA_DIR` → `$DATA_DIR`) so agents edit real files on disk
+4. Pushes the task branch and lands onto that project's base branch when verified
+
+Without a per-project repo, tasks fall back to the global proving remote (`PROVING_REPO_URL` / Control panel) or the in-repo `demo-app` fixture — fine for smoke tests, not for real products.
+
+`merged` means the change is on that project's base tip (or the global proving tip for fallback tasks).
+
+**Environment:** LLM keys and `GITHUB_TOKEN` come from `.env` / Control. Product-specific tooling (language runtimes, package installs) lives in the worker image and whatever your repo's own CI/`Makefile` expects — the worker cwd is the task checkout.
 
 ---
 
@@ -147,7 +158,7 @@ You (office UI / CLI / API)
   Orchestrator (tasks, sprints, events, control plane)
         │
    ├── LiteLLM  → model providers
-   └── Workers  → one container per task → proving git remote
+   └── Workers  → one container per task → per-project git mirror / remote
 ```
 
 More detail: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)

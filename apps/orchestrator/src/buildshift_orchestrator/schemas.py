@@ -93,6 +93,11 @@ class ProjectOut(BaseModel):
     status: str
     prd_path: str | None = None
     has_prd: bool = False
+    repo_url: str | None = None
+    repo_branch: str = "main"
+    repo_path: str | None = None
+    repo_synced_at: datetime | None = None
+    has_repo: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -104,6 +109,14 @@ class ProjectDetailOut(BaseModel):
     modules: list[PrdProductOut]
     sprint_count: int
     open_hitl: int
+
+
+class ProjectRepoIn(BaseModel):
+    """Connect a git remote (or local path) that workers will clone and land onto."""
+
+    repo_url: str
+    repo_branch: str = "main"
+    sync: bool = True
 
 
 class ProjectPrdIn(BaseModel):

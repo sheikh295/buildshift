@@ -4,6 +4,7 @@ import re
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -23,6 +24,7 @@ from buildshift_orchestrator.models import (
 )
 from buildshift_orchestrator.prd.indexer import index_prd_markdown
 from buildshift_orchestrator.router_config import role_tier, router_limits
+from buildshift_orchestrator.runner import gitops
 from buildshift_orchestrator.runner.locks import owned_paths_overlap
 
 # Rough hours per ticket — capacity is a ceiling, not a pad target
@@ -42,6 +44,85 @@ def create_project(db: Session, title: str, slug: str | None = None) -> Project:
     project = Project(id=uuid.uuid4(), slug=slug, title=title, status="active")
     db.add(project)
     emit(db, kind="project.created", summary=f"Created project {title}", payload={"project_id": str(project.id)})
+    db.commit()
+    db.refresh(project)
+    return project
+
+
+def project_mirror_path(settings: Settings, project: Project) -> Path:
+    return settings.data_dir / "repos" / project.slug
+
+
+def connect_project_repo(
+    db: Session,
+    project_id: uuid.UUID,
+    *,
+    repo_url: str,
+    repo_branch: str = "main",
+    sync: bool = True,
+    settings: Settings | None = None,
+) -> Project:
+    """Bind a Project to a git remote (HTTPS/SSH) or local path; optionally clone/fetch now."""
+    project = db.get(Project, project_id)
+    if project is None:
+        raise ValueError("project not found")
+    url = (repo_url or "").strip()
+    if not url:
+        raise ValueError("repo_url is required")
+    branch = (repo_branch or "main").strip() or "main"
+    project.repo_url = url
+    project.repo_branch = branch
+    project.updated_at = datetime.now(timezone.utc)
+
+    if sync:
+        if settings is None:
+            raise ValueError("settings required to sync repo")
+        mirror = project_mirror_path(settings, project)
+        try:
+            gitops.ensure_repo(url, mirror, branch)
+        except gitops.GitError as exc:
+            raise ValueError(f"failed to clone/sync repo: {exc}") from exc
+        project.repo_path = str(mirror)
+        project.repo_synced_at = datetime.now(timezone.utc)
+
+    emit(
+        db,
+        kind="project.repo_connected",
+        summary=f"Connected repo for {project.title}",
+        payload={
+            "project_id": str(project.id),
+            "repo_url": project.repo_url,
+            "repo_branch": project.repo_branch,
+            "repo_path": project.repo_path,
+            "synced": sync,
+        },
+    )
+    db.commit()
+    db.refresh(project)
+    return project
+
+
+def sync_project_repo(db: Session, project_id: uuid.UUID, settings: Settings) -> Project:
+    """Fetch/reset the project's local mirror from its configured remote."""
+    project = db.get(Project, project_id)
+    if project is None:
+        raise ValueError("project not found")
+    if not (project.repo_url or "").strip():
+        raise ValueError("project has no repo_url — connect a repository first")
+    mirror = project_mirror_path(settings, project)
+    try:
+        gitops.ensure_repo(project.repo_url.strip(), mirror, project.repo_branch or "main")
+    except gitops.GitError as exc:
+        raise ValueError(f"failed to sync repo: {exc}") from exc
+    project.repo_path = str(mirror)
+    project.repo_synced_at = datetime.now(timezone.utc)
+    project.updated_at = datetime.now(timezone.utc)
+    emit(
+        db,
+        kind="project.repo_synced",
+        summary=f"Synced repo for {project.title}",
+        payload={"project_id": str(project.id), "repo_path": project.repo_path},
+    )
     db.commit()
     db.refresh(project)
     return project

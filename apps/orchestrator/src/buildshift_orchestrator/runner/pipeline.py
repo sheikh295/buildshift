@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from buildshift_orchestrator.config import Settings
 from buildshift_orchestrator.control import add_daily_spend
 from buildshift_orchestrator.events import emit
-from buildshift_orchestrator.models import Run, Task, TaskState
+from buildshift_orchestrator.models import Project, Run, Task, TaskState
 from buildshift_orchestrator.router_config import role_model, role_tier
 from buildshift_orchestrator.runner import gitops
 from buildshift_orchestrator.runner.docker_run import run_worker
@@ -106,6 +106,33 @@ def resolve_clone_url(settings: Settings) -> str:
     return str(_fixture_remote(settings))
 
 
+def resolve_task_repo(
+    settings: Settings, task: Task, db: Session | None = None
+) -> tuple[str, Path, str, str]:
+    """Return (clone_url, mirror_path, base_branch, repo_name) for a task.
+
+    Prefer the task's Project repo when connected; otherwise the global proving
+    remote (or demo-app fixture).
+    """
+    project: Project | None = None
+    if task.project_id is not None and db is not None:
+        project = db.get(Project, task.project_id)
+
+    if project is not None and (project.repo_url or "").strip():
+        clone_url = project.repo_url.strip()
+        base = (project.repo_branch or "main").strip() or "main"
+        repo_name = project.slug
+        mirror = Path(project.repo_path) if project.repo_path else (
+            settings.data_dir / "repos" / project.slug
+        )
+        return clone_url, mirror, base, repo_name
+
+    clone_url = resolve_clone_url(settings)
+    base = settings.proving_repo_branch or "main"
+    repo_name = "proving" if settings.proving_repo_url.strip() else "demo-app"
+    return clone_url, settings.data_dir / "repos" / repo_name, base, repo_name
+
+
 def build_prompt(task: Task, role: str) -> str:
     paths = ", ".join(task.owned_paths) if task.owned_paths else "(any)"
     role_blurb = {
@@ -153,19 +180,16 @@ def _use_multi_role(settings: Settings, task: Task) -> bool:
 
 
 def _prepare_checkout(
-    settings: Settings, task: Task
-) -> tuple[str, Path, Path, str, Path]:
-    clone_url = resolve_clone_url(settings)
-    repos_dir = settings.data_dir / "repos"
+    settings: Settings, task: Task, db: Session | None = None
+) -> tuple[str, Path, Path, str, Path, str]:
+    clone_url, repo_path, base, repo_name = resolve_task_repo(settings, task, db)
     worktrees_dir = settings.data_dir / "worktrees"
-    repo_name = "proving" if settings.proving_repo_url else "demo-app"
-    repo_path = repos_dir / repo_name
     branch = task.branch or f"buildshift/{task.id.hex[:12]}"
     worktree = worktrees_dir / task.id.hex
-    gitops.ensure_repo(clone_url, repo_path, settings.proving_repo_branch)
-    gitops.create_task_checkout(repo_path, branch, worktree, settings.proving_repo_branch)
+    gitops.ensure_repo(clone_url, repo_path, base)
+    gitops.create_task_checkout(repo_path, branch, worktree, base)
     subprocess.run(["chown", "-R", "10001:10001", str(worktree)], check=False)
-    return clone_url, repo_path, worktree, branch, Path(repo_name)
+    return clone_url, repo_path, worktree, branch, Path(repo_name), base
 
 
 def _integrate(
@@ -178,6 +202,7 @@ def _integrate(
     worktree: Path,
     branch: str,
     repo_name: str,
+    base: str,
 ) -> None:
     """Single-flight merge queue: rebase → local CI → land on base → merged."""
     with _MERGE_LOCK:
@@ -185,7 +210,6 @@ def _integrate(
         task.updated_at = datetime.now(timezone.utc)
         db.commit()
 
-        base = settings.proving_repo_branch
         token = settings.github_token
         try:
             gitops.rebase_onto_base(worktree, base)
@@ -326,7 +350,9 @@ def _run_stage(db: Session, settings: Settings, task: Task, role: str) -> None:
         time.sleep(PATH_LOCK_BACKOFF_SEC)
         return
 
-    clone_url, repo_path, worktree, branch, repo_name = _prepare_checkout(settings, task)
+    clone_url, repo_path, worktree, branch, repo_name, base = _prepare_checkout(
+        settings, task, db
+    )
     task.branch = branch
     task.worktree_path = str(worktree)
     db.commit()
@@ -347,6 +373,7 @@ def _run_stage(db: Session, settings: Settings, task: Task, role: str) -> None:
                 worktree=worktree,
                 branch=branch,
                 repo_name=str(repo_name),
+                base=base,
             )
         finally:
             try:
@@ -368,9 +395,9 @@ def _run_stage(db: Session, settings: Settings, task: Task, role: str) -> None:
         if exit_code != 0:
             raise RuntimeError(f"worker exited {exit_code}\n{logs[-4000:]}")
 
-        if not gitops.has_commits_ahead(worktree, settings.proving_repo_branch):
+        if not gitops.has_commits_ahead(worktree, base):
             raise RuntimeError(
-                f"worker produced no commits ahead of {settings.proving_repo_branch}\n{logs[-2000:]}"
+                f"worker produced no commits ahead of {base}\n{logs[-2000:]}"
             )
 
         # Persist stage commits for the next stage
@@ -427,6 +454,7 @@ def _run_stage(db: Session, settings: Settings, task: Task, role: str) -> None:
                 worktree=worktree,
                 branch=branch,
                 repo_name=str(repo_name),
+                base=base,
             )
             return
 
@@ -470,6 +498,7 @@ def _run_stage(db: Session, settings: Settings, task: Task, role: str) -> None:
                 worktree=worktree,
                 branch=branch,
                 repo_name=str(repo_name),
+                base=base,
             )
     except Exception as exc:
         log.exception("task %s stage %s failed", task.id, role)
@@ -530,7 +559,9 @@ def run_task_legacy(db: Session, settings: Settings, task: Task) -> None:
     )
     db.commit()
 
-    clone_url, repo_path, worktree, branch, repo_name = _prepare_checkout(settings, task)
+    clone_url, repo_path, worktree, branch, repo_name, base = _prepare_checkout(
+        settings, task, db
+    )
     task.branch = branch
     task.worktree_path = str(worktree)
     db.commit()
@@ -551,8 +582,8 @@ def run_task_legacy(db: Session, settings: Settings, task: Task) -> None:
         run.logs = logs[-100_000:]
         if exit_code != 0:
             raise RuntimeError(f"worker exited {exit_code}\n{logs[-4000:]}")
-        if not gitops.has_commits_ahead(worktree, settings.proving_repo_branch):
-            raise RuntimeError("worker produced no commits ahead of base branch")
+        if not gitops.has_commits_ahead(worktree, base):
+            raise RuntimeError(f"worker produced no commits ahead of {base}")
 
         cost = Decimal("0") if settings.harness == "mock" else Decimal("0.01")
         task.spent_usd = (task.spent_usd or Decimal("0")) + cost
@@ -569,6 +600,7 @@ def run_task_legacy(db: Session, settings: Settings, task: Task) -> None:
             worktree=worktree,
             branch=branch,
             repo_name=str(repo_name),
+            base=base,
         )
     except Exception as exc:
         log.exception("legacy task %s failed", task.id)

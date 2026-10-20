@@ -72,6 +72,13 @@ export const orch = {
       body: JSON.stringify({ title, slug: slug || null }),
     }),
   project: (id: string) => api<ProjectDetail>(`/projects/${id}`),
+  connectRepo: (projectId: string, repoUrl: string, repoBranch = "main", sync = true) =>
+    api<Project>(`/projects/${projectId}/repo`, {
+      method: "PUT",
+      body: JSON.stringify({ repo_url: repoUrl, repo_branch: repoBranch, sync }),
+    }),
+  syncRepo: (projectId: string) =>
+    api<Project>(`/projects/${projectId}/repo/sync`, { method: "POST" }),
   uploadPrd: (projectId: string, markdown: string, sourceName = "uploaded.md") =>
     api<{ project_id: string; modules: number; module_ids: string[] }>(
       `/projects/${projectId}/prd`,

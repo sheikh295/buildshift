@@ -22,7 +22,7 @@
       "h": 608,
       "accent": "#3d8bfd",
       "permanent": [
-        { "id": "planner-1", "name": "Morgan", "role": "planner", "seat": 0 }
+        { "id": "planner-1", "name": "CTO", "role": "planner", "seat": 0 }
       ],
       "maxHire": 0,
       "desks": [

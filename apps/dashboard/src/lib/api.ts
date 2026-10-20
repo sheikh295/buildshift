@@ -1,4 +1,5 @@
 import type {
+  CtoChatMessage,
   EodDigest,
   EventRow,
   HitlTree,
@@ -89,6 +90,19 @@ export const orch = {
       `/projects/${projectId}/reindex`,
       { method: "POST" }
     ),
+  ctoChatHistory: (projectId: string) =>
+    api<CtoChatMessage[]>(`/projects/${projectId}/cto/chat`),
+  ctoChat: (projectId: string, message: string) =>
+    api<{
+      reply: CtoChatMessage;
+      history: CtoChatMessage[];
+      applied_actions: unknown[];
+    }>(`/projects/${projectId}/cto/chat`, {
+      method: "POST",
+      body: JSON.stringify({ message }),
+    }),
+  ctoChatClear: (projectId: string) =>
+    api<void>(`/projects/${projectId}/cto/chat`, { method: "DELETE" }),
   sprints: (projectId: string) => api<Sprint[]>(`/projects/${projectId}/sprints`),
   proposeSprint: (projectId: string, capacityHours: number) =>
     api<Sprint>(`/projects/${projectId}/sprints/propose`, {

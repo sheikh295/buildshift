@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { orch } from "@/lib/api";
 import type {
+  CtoChatMessage,
   EodDigest,
   HitlTree,
   Project,
@@ -15,7 +16,60 @@ import type {
   UsageReport,
 } from "@/lib/types";
 
-type Panel = "projects" | "inbox" | "plan" | "board" | "eod" | "usage" | "control" | null;
+type Panel =
+  | "projects"
+  | "inbox"
+  | "plan"
+  | "board"
+  | "eod"
+  | "usage"
+  | "control"
+  | "cto"
+  | null;
+
+function formatGoals(goals: unknown): string {
+  if (!goals) return "";
+  if (typeof goals === "string") return goals;
+  if (Array.isArray(goals)) {
+    return goals
+      .map((g) => {
+        if (typeof g === "string") return g;
+        if (g && typeof g === "object" && "text" in g) return String((g as { text: unknown }).text);
+        return JSON.stringify(g);
+      })
+      .filter(Boolean)
+      .join("\n");
+  }
+  return String(goals);
+}
+
+function TaskBody({ task }: { task: Task }) {
+  const criteria = (task.acceptance_criteria || "").trim();
+  const paths = task.owned_paths || [];
+  return (
+    <>
+      {criteria ? (
+        <>
+          <dt>What / criteria</dt>
+          <dd className="body-text">{criteria}</dd>
+        </>
+      ) : (
+        <>
+          <dt>What / criteria</dt>
+          <dd className="muted">No acceptance criteria on this task.</dd>
+        </>
+      )}
+      {paths.length > 0 && (
+        <>
+          <dt>Owned paths</dt>
+          <dd>
+            <code>{paths.join(", ")}</code>
+          </dd>
+        </>
+      )}
+    </>
+  );
+}
 
 const PROJECT_KEY = "bs-selected-project";
 
@@ -102,6 +156,7 @@ export function Hud({ tasks, selection, onCloseInspector, onRefresh }: Props) {
             <dd>
               {selection.task.sprint_id?.slice(0, 8) || "—"} / {selection.task.parent_epic || "—"}
             </dd>
+            <TaskBody task={selection.task} />
             <dt>Branch</dt>
             <dd>{selection.task.branch || "—"}</dd>
             <dt>PR</dt>
@@ -145,6 +200,15 @@ export function Hud({ tasks, selection, onCloseInspector, onRefresh }: Props) {
             <dt>Working on</dt>
             <dd>{selection.agent.taskTitle || "— idle / roaming —"}</dd>
           </dl>
+          {(selection.agent.role === "planner" ||
+            selection.agent.name === "CTO" ||
+            selection.agent.cabinId === "planner") && (
+            <div className="inspector-actions">
+              <button type="button" onClick={() => setPanel("cto")}>
+                Chat with CTO
+              </button>
+            </div>
+          )}
           {selection.task && (
             <>
               <h3 className="sub">Linked task</h3>
@@ -153,6 +217,7 @@ export function Hud({ tasks, selection, onCloseInspector, onRefresh }: Props) {
                 <dd>{selection.task.title}</dd>
                 <dt>State</dt>
                 <dd>{selection.task.state}</dd>
+                <TaskBody task={selection.task} />
                 <dt>Spend</dt>
                 <dd>
                   {selection.task.spent_usd} / {selection.task.budget_usd}
@@ -166,7 +231,7 @@ export function Hud({ tasks, selection, onCloseInspector, onRefresh }: Props) {
       {panel && (
         <div className="drawer">
           <header>
-            <strong>{panel.toUpperCase()}</strong>
+            <strong>{panel === "cto" ? "CTO CHAT" : panel.toUpperCase()}</strong>
             <button type="button" onClick={() => setPanel(null)}>
               ×
             </button>
@@ -184,9 +249,131 @@ export function Hud({ tasks, selection, onCloseInspector, onRefresh }: Props) {
           {panel === "eod" && <EodPanel projectId={projectId} onSelect={setProjectId} />}
           {panel === "usage" && <UsagePanel projectId={projectId} onSelect={setProjectId} />}
           {panel === "control" && <ControlPanel onChange={onRefresh} />}
+          {panel === "cto" && (
+            <CtoChatPanel projectId={projectId} onSelect={setProjectId} onChange={onRefresh} />
+          )}
         </div>
       )}
     </>
+  );
+}
+
+function CtoChatPanel({
+  projectId,
+  onSelect,
+  onChange,
+}: {
+  projectId: string;
+  onSelect: (id: string) => void;
+  onChange: () => void;
+}) {
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [history, setHistory] = useState<CtoChatMessage[]>([]);
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [applied, setApplied] = useState("");
+
+  const load = async (id: string) => {
+    if (!id) {
+      setHistory([]);
+      return;
+    }
+    setHistory(await orch.ctoChatHistory(id));
+  };
+
+  useEffect(() => {
+    orch.projects().then(setProjects).catch((e) => setErr(String(e)));
+  }, []);
+
+  useEffect(() => {
+    load(projectId).catch((e) => setErr(String(e)));
+  }, [projectId]);
+
+  return (
+    <div className="panel-body cto-chat">
+      <p className="muted">
+        You are the Boss. Talk to your CTO about this project — priorities, tickets, sprints,
+        blockers, or new work to schedule.
+      </p>
+      <ProjectSelect projectId={projectId} onSelect={onSelect} projects={projects} />
+      <div className="row">
+        <button
+          type="button"
+          className="ghost"
+          disabled={!projectId || busy || history.length === 0}
+          onClick={async () => {
+            if (!projectId) return;
+            setBusy(true);
+            setErr("");
+            try {
+              await orch.ctoChatClear(projectId);
+              setHistory([]);
+              setApplied("");
+            } catch (e) {
+              setErr(String(e));
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          Clear chat
+        </button>
+      </div>
+
+      <div className="chat-log">
+        {history.length === 0 && (
+          <p className="muted">No messages yet. Pick a project and ask the CTO anything.</p>
+        )}
+        {history.map((m) => (
+          <div key={m.id} className={`chat-bubble ${m.role === "user" ? "you" : "cto"}`}>
+            <div className="chat-who">{m.role === "user" ? "You (Boss)" : "CTO"}</div>
+            <div className="body-text">{m.content}</div>
+            {!!(m.actions && m.actions.length) && (
+              <p className="muted">Applied: {JSON.stringify(m.actions)}</p>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <label>
+        Message
+        <textarea
+          rows={3}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          placeholder="e.g. What's left in the current sprint? Add a ticket to fix the login redirect."
+          disabled={!projectId || busy}
+        />
+      </label>
+      <button
+        type="button"
+        disabled={!projectId || !draft.trim() || busy}
+        onClick={async () => {
+          if (!projectId) return;
+          setBusy(true);
+          setErr("");
+          setApplied("");
+          try {
+            const r = await orch.ctoChat(projectId, draft.trim());
+            setDraft("");
+            setHistory(r.history);
+            if (r.applied_actions?.length) {
+              setApplied(`CTO applied ${r.applied_actions.length} change(s)`);
+              onChange();
+            }
+          } catch (e) {
+            setErr(String(e));
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        {busy ? "CTO thinking…" : "Send"}
+      </button>
+      {err && <p className="err">{err}</p>}
+      {applied && <p className="muted">{applied}</p>}
+    </div>
   );
 }
 
@@ -727,13 +914,25 @@ function PlanPanel({
             <span className="tag">{detail.sprint.status}</span> est {detail.sprint.estimated_hours}h /
             ceiling {detail.sprint.capacity_hours}h · ${detail.sprint.estimated_spend_usd}
           </p>
+          {formatGoals(detail.sprint.goals) && (
+            <div className="card-row">
+              <h4>Sprint goals</h4>
+              <pre className="body-text">{formatGoals(detail.sprint.goals)}</pre>
+            </div>
+          )}
           {detail.epics.map((block) => (
             <div key={block.epic.id} className="tree-node">
               <strong>{block.epic.title}</strong>
+              {block.epic.summary ? (
+                <p className="body-text muted">{block.epic.summary}</p>
+              ) : null}
               <ul>
                 {block.tasks.map((t) => (
                   <li key={t.id}>
                     <span className="tag">{t.state}</span> {t.title}
+                    {t.acceptance_criteria ? (
+                      <div className="body-text muted">{t.acceptance_criteria}</div>
+                    ) : null}
                   </li>
                 ))}
               </ul>
@@ -809,11 +1008,20 @@ function BoardPanel({
 
       {detail ? (
         <div className="tree">
+          {formatGoals(detail.sprint.goals) && (
+            <div className="card-row">
+              <h4>Sprint goals</h4>
+              <pre className="body-text">{formatGoals(detail.sprint.goals)}</pre>
+            </div>
+          )}
           {detail.epics.map((block) => (
             <div key={block.epic.id} className="tree-node">
               <strong>
                 Epic · {block.epic.title} <span className="tag">{block.epic.status}</span>
               </strong>
+              {block.epic.summary ? (
+                <p className="body-text">{block.epic.summary}</p>
+              ) : null}
               <ul>
                 {block.tasks.map((t) => {
                   const live = scoped.find((x) => x.id === t.id) || t;
@@ -822,6 +1030,9 @@ function BoardPanel({
                       <button type="button" className="linkish" onClick={() => setTaskFocus(live)}>
                         <span className="tag">{live.state}</span> {live.title}
                       </button>
+                      {live.acceptance_criteria ? (
+                        <div className="body-text muted">{live.acceptance_criteria}</div>
+                      ) : null}
                     </li>
                   );
                 })}
@@ -843,6 +1054,7 @@ function BoardPanel({
             <dd>
               {taskFocus.role} / {taskFocus.stage || "—"}
             </dd>
+            <TaskBody task={taskFocus} />
             <dt>Spend</dt>
             <dd>
               {taskFocus.spent_usd} / {taskFocus.budget_usd}

@@ -34,6 +34,7 @@ from buildshift_orchestrator.models import (
     TaskState,
 )
 from buildshift_orchestrator.planning.planner import approve_plan, kickoff_product, propose_plan
+from buildshift_orchestrator.planning import cto_chat as cto_chat_svc
 from buildshift_orchestrator.planning import sprints as sprint_svc
 from buildshift_orchestrator.prd.indexer import index_prd_markdown, list_products
 from buildshift_orchestrator.runner.pipeline import resolve_clone_url
@@ -65,6 +66,9 @@ from buildshift_orchestrator.schemas import (
     PrdIndexIn,
     PrdIndexOut,
     PrdProductOut,
+    CtoChatIn,
+    CtoChatMessageOut,
+    CtoChatOut,
     ProjectCreate,
     ProjectDetailOut,
     ProjectOut,
@@ -285,6 +289,43 @@ def projects_reindex(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return ProjectPrdOut(**result)
+
+
+@router.get("/projects/{project_id}/cto/chat", response_model=list[CtoChatMessageOut])
+def cto_chat_history(project_id: uuid.UUID, db: Session = Depends(get_db)) -> list[CtoChatMessageOut]:
+    if db.get(Project, project_id) is None:
+        raise HTTPException(status_code=404, detail="project not found")
+    return [
+        CtoChatMessageOut.model_validate(m)
+        for m in cto_chat_svc.list_messages(db, project_id)
+    ]
+
+
+@router.post("/projects/{project_id}/cto/chat", response_model=CtoChatOut)
+def cto_chat_send(
+    project_id: uuid.UUID,
+    body: CtoChatIn,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> CtoChatOut:
+    try:
+        result = cto_chat_svc.chat(db, settings, project_id, body.message)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return CtoChatOut(
+        reply=CtoChatMessageOut.model_validate(result["reply"]),
+        history=[CtoChatMessageOut.model_validate(m) for m in result["history"]],
+        applied_actions=result.get("applied_actions") or [],
+    )
+
+
+@router.delete("/projects/{project_id}/cto/chat", status_code=204)
+def cto_chat_clear(project_id: uuid.UUID, db: Session = Depends(get_db)) -> None:
+    if db.get(Project, project_id) is None:
+        raise HTTPException(status_code=404, detail="project not found")
+    cto_chat_svc.clear_messages(db, project_id)
 
 
 @router.get("/projects/{project_id}/sprints", response_model=list[SprintOut])

@@ -5,6 +5,8 @@ export type Task = {
   tier: string;
   role: string;
   stage?: string | null;
+  acceptance_criteria?: string;
+  owned_paths?: string[];
   spent_usd: number | string;
   budget_usd: number | string;
   pr_url?: string | null;
@@ -124,8 +126,19 @@ export type Epic = {
   project_id: string;
   product_id?: string | null;
   title: string;
+  summary?: string;
   status: string;
   sort_order: number;
+};
+
+export type CtoChatMessage = {
+  id: string;
+  project_id: string;
+  role: "user" | "assistant" | string;
+  content: string;
+  actions?: unknown[];
+  cost_usd?: number | string;
+  created_at: string;
 };
 
 export type SprintDetail = {

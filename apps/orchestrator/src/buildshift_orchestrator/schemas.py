@@ -159,10 +159,33 @@ class EpicOut(BaseModel):
     project_id: uuid.UUID
     product_id: uuid.UUID | None = None
     title: str
+    summary: str = ""
     status: str
     sort_order: int
 
     model_config = {"from_attributes": True}
+
+
+class CtoChatMessageOut(BaseModel):
+    id: uuid.UUID
+    project_id: uuid.UUID
+    role: str
+    content: str
+    actions: list = Field(default_factory=list)
+    cost_usd: Decimal = Decimal("0")
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class CtoChatIn(BaseModel):
+    message: str
+
+
+class CtoChatOut(BaseModel):
+    reply: CtoChatMessageOut
+    history: list[CtoChatMessageOut] = Field(default_factory=list)
+    applied_actions: list = Field(default_factory=list)
 
 
 class SprintDetailOut(BaseModel):

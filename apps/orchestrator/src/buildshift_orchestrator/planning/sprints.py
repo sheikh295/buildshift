@@ -347,12 +347,14 @@ def propose_sprint(
     created_tasks: list[Task] = []
     for product_id, tickets in by_product.items():
         title = tickets[0]["product_title"]
+        product = db.get(PrdProduct, product_id)
         epic = Epic(
             id=uuid.uuid4(),
             sprint_id=sprint.id,
             project_id=project.id,
             product_id=product_id,
             title=title,
+            summary=(product.summary if product else "") or "",
             status="planned",
             sort_order=sort_i,
         )

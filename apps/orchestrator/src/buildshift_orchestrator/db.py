@@ -24,6 +24,13 @@ def get_db() -> Generator[Session, None, None]:
         db.close()
 
 
+# Renamed migration files → previous filenames (already applied DBs stay compatible)
+_LEGACY_MIGRATION_ALIASES = {
+    "002_prd_planning.sql": "002_week2.sql",
+    "003_runtime_settings.sql": "003_week3.sql",
+}
+
+
 def apply_migrations() -> None:
     settings = get_settings()
     migrations_dir = settings.migrations_dir
@@ -47,8 +54,19 @@ def apply_migrations() -> None:
             row[0]
             for row in conn.execute(text("SELECT filename FROM schema_migrations")).fetchall()
         }
+        # Record current names when only the legacy filename was applied
+        for new_name, old_name in _LEGACY_MIGRATION_ALIASES.items():
+            if old_name in applied and new_name not in applied:
+                conn.execute(
+                    text("INSERT INTO schema_migrations (filename) VALUES (:f)"),
+                    {"f": new_name},
+                )
+                applied.add(new_name)
         for path in sorted(migrations_dir.glob("*.sql")):
             if path.name in applied:
+                continue
+            legacy = _LEGACY_MIGRATION_ALIASES.get(path.name)
+            if legacy and legacy in applied:
                 continue
             conn.execute(text(path.read_text()))
             conn.execute(

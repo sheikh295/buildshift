@@ -199,7 +199,7 @@ limits:
   max_parallel_workers: 4
 ```
 
-(Values are placeholders; set them from week-1 measurements.)
+(Values are placeholders; set them from baseline measurements.)
 
 ## 11. Quality gates
 
@@ -248,20 +248,20 @@ Dashboard (Next.js, SSE):
 
 ## 15. Build plan (about 23 days)
 
-**Week 1: one task, end to end**
+**Phase 1: one task, end to end**
 - Days 1-2: provision box, build worker image, choose proving repo, run a 10-task bake-off across candidate harnesses and models. Exit: harness and default-model choice, measured cost per task.
 - Days 3-5: orchestrator skeleton (Postgres schema, state machine, runner: worktree → container → run → push → PR), per-task caps, kill switch. Exit: a CLI task produces a green PR.
 - Days 6-7: integrator v0 (rebase, rerun CI, route failures back with retry cap). Exit: 10 sequential tasks with a measured success rate.
 
-**Week 2: the real pipeline**
+**Phase 2: the real pipeline**
 - Days 8-10: PRD indexer, per-product kickoff and the daily planning flow (CLI and markdown first): persistent backlog, plan diffs, approval gate, human-dependency manifest. Exit: an indexed PRD and an approved day plan for one product.
 - Days 11-12: test-author split, cross-model reviewer, retry loops.
 - Days 13-16: parallel workers with path locks and merge queue. Exit: a real feature of about 12 tasks lands with you only approving the plan and merging.
 
-**Week 3: trustworthy**
+**Phase 3: trustworthy**
 - Days 17-18: dashboard (including the morning-planning screen), HITL inbox, EOD digest.
 - Days 19-20: hardening (egress proxy, scoped tokens, protected main, spend caps, stuck-task detection, crash recovery, backups).
-- Days 21-23: burn-in on a week of real work; tune `AGENTS.md` and prompts; fix top failure classes.
+- Days 21-23: burn-in on a stretch of real work; tune `AGENTS.md` and prompts; fix top failure classes.
 
 Rolling-wave planning adds about 2 days over the original schedule (about 23 days in total). To stay at 21, defer dashboard polish until after burn-in; the planning flow works from the CLI first.
 
@@ -269,11 +269,11 @@ Rolling-wave planning adds about 2 days over the original schedule (about 23 day
 
 **What decides the schedule**
 - Test coverage and CI quality in the proving repo (weak tests mean building a safety net first).
-- Day-2 bake-off outcome (a harness needing heavy wrapping stretches week 1).
+- Day-2 bake-off outcome (a harness needing heavy wrapping stretches Phase 1).
 
 ## 16. Success metrics
 
-Targets to calibrate after week 1:
+Targets to calibrate after Phase 1:
 - CI first-pass rate of 80% or higher.
 - 60% or more of PRs merged without your edits.
 - Cost per merged PR tracked daily and trending down.

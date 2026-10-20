@@ -1,4 +1,4 @@
--- Week 3.5: Projects (full PRD), sprints, epics
+-- Projects (full PRD), sprints, epics
 
 CREATE TABLE IF NOT EXISTS projects (
     id UUID PRIMARY KEY,

@@ -94,7 +94,7 @@ for i in $(seq 1 360); do
       merged) ;;
       parked|failed|stopped)
         curl -sf "$URL/tasks/$tid" | python3 -m json.tool
-        echo "SMOKE-WEEK25 FAILED: $tid terminal $STATE" >&2
+        echo "SMOKE-MERGE-QUEUE FAILED: $tid terminal $STATE" >&2
         exit 1
         ;;
       *) ALL_MERGED=0 ;;
@@ -127,11 +127,11 @@ if missing:
     sys.exit(1)
 print(f"verified {len(paths)} owned paths on base")
 PY
-    echo "SMOKE-WEEK25 OK"
+    echo "SMOKE-MERGE-QUEUE OK"
     exit 0
   fi
   sleep 3
 done
 
-echo "SMOKE-WEEK25 FAILED: timed out" >&2
+echo "SMOKE-MERGE-QUEUE FAILED: timed out" >&2
 exit 1

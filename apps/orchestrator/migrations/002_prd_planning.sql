@@ -1,4 +1,4 @@
--- Week 2: PRD, planning, path locks, task extensions
+-- PRD products, planning, path locks, task extensions
 
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS product_id UUID;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS plan_id UUID;

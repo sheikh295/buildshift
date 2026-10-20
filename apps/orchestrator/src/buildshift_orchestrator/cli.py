@@ -46,7 +46,7 @@ def task_create(
     budget: Optional[float] = typer.Option(None, "--budget", help="Per-task USD budget"),
     tier: str = typer.Option("T1", "--tier"),
 ) -> None:
-    """Enqueue an ad-hoc task (Week 1 single-role path)."""
+    """Enqueue an ad-hoc task (single-role path)."""
     payload = {
         "title": title,
         "acceptance_criteria": criteria,

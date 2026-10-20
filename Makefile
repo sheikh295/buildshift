@@ -1,4 +1,4 @@
-.PHONY: help up down down-wipe build logs ps health task kill smoke smoke-week2 smoke-week25 smoke-week3 smoke-hud migrate shell
+.PHONY: help up down down-wipe build logs ps health task kill smoke smoke-plan smoke-merge-queue smoke-office smoke-hud migrate shell
 
 COMPOSE ?= docker compose
 BUILDSHIFT_URL ?= http://127.0.0.1:8080
@@ -11,17 +11,17 @@ export HOST_DATA_DIR
 help:
 	@echo "Buildshift — portable Compose stack"
 	@echo ""
-	@echo "  make up           Build images and start stack (incl. office UI)"
-	@echo "  make down         Stop stack (keep volumes)"
-	@echo "  make down-wipe    Stop and remove volumes"
-	@echo "  make logs         Follow orchestrator logs"
-	@echo "  make ps           Show compose services"
-	@echo "  make health       Hit /health"
-	@echo "  make smoke        Week 1: enqueue mock task and wait"
-	@echo "  make smoke-week2  Week 2: index PRD → approve plan → multi-role merge"
-	@echo "  make smoke-week25 Week 2.5: 12 tasks land on proving base"
-	@echo "  make smoke-week3  Week 3: settings + SSE + HITL + office up"
-	@echo "  make smoke-hud    Projects / sprints / HITL tree / usage"
+	@echo "  make up                Build images and start stack (incl. office UI)"
+	@echo "  make down              Stop stack (keep volumes)"
+	@echo "  make down-wipe         Stop and remove volumes"
+	@echo "  make logs              Follow orchestrator logs"
+	@echo "  make ps                Show compose services"
+	@echo "  make health            Hit /health"
+	@echo "  make smoke             Enqueue mock task and wait"
+	@echo "  make smoke-plan        Index PRD → approve plan → multi-role merge"
+	@echo "  make smoke-merge-queue 12 tasks land on proving base"
+	@echo "  make smoke-office      Settings + SSE + HITL + office up"
+	@echo "  make smoke-hud         Projects / sprints / HITL tree / usage"
 	@echo "  make task ARGS='create \"title\" -c \"...\"'"
 	@echo "  make kill ARGS='true|false'"
 
@@ -63,14 +63,14 @@ kill:
 smoke:
 	./scripts/smoke.sh
 
-smoke-week2:
-	./scripts/smoke-week2.sh
+smoke-plan:
+	./scripts/smoke-plan.sh
 
-smoke-week25:
-	./scripts/smoke-week25.sh
+smoke-merge-queue:
+	./scripts/smoke-merge-queue.sh
 
-smoke-week3:
-	./scripts/smoke-week3.sh
+smoke-office:
+	./scripts/smoke-office.sh
 
 smoke-hud:
 	./scripts/smoke-hud.sh

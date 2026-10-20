@@ -1,4 +1,4 @@
--- Buildshift core schema (Week 1 subset)
+-- Buildshift core schema (tasks, runs, events, control)
 
 CREATE TABLE IF NOT EXISTS control (
     key TEXT PRIMARY KEY,

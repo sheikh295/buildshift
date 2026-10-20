@@ -503,7 +503,7 @@ def _run_stage(db: Session, settings: Settings, task: Task, role: str) -> None:
 
 
 def run_task_legacy(db: Session, settings: Settings, task: Task) -> None:
-    """Week 1 single-shot implementer path (ad-hoc tasks without a plan)."""
+    """Single-shot implementer path for ad-hoc tasks without a multi-role plan."""
     run = Run(
         id=uuid.uuid4(),
         task_id=task.id,

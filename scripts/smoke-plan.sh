@@ -71,18 +71,18 @@ for i in $(seq 1 180); do
       merged) ;;
       parked|failed|stopped)
         curl -sf "$URL/tasks/$tid" | python3 -m json.tool
-        echo "SMOKE-WEEK2 FAILED: $tid terminal $STATE" >&2
+        echo "SMOKE-PLAN FAILED: $tid terminal $STATE" >&2
         exit 1
         ;;
       *) ALL_MERGED=0 ;;
     esac
   done
   if [[ "$ALL_MERGED" -eq 1 ]]; then
-    echo "SMOKE-WEEK2 OK"
+    echo "SMOKE-PLAN OK"
     exit 0
   fi
   sleep 3
 done
 
-echo "SMOKE-WEEK2 FAILED: timed out" >&2
+echo "SMOKE-PLAN FAILED: timed out" >&2
 exit 1

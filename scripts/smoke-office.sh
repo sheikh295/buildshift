@@ -81,7 +81,7 @@ curl -sf "${AUTH[@]}" "$URL/hitl?status=open" | python3 -m json.tool >/dev/null
 echo "==> create + reply HITL"
 HITL="$(curl -sf "${AUTH[@]}" -X POST "$URL/hitl" \
   -H 'content-type: application/json' \
-  -d '{"kind":"smoke","summary":"week3 smoke hitl"}')"
+  -d '{"kind":"smoke","summary":"office smoke hitl"}')"
 HITL_ID="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])' <<<"$HITL")"
 curl -sf "${AUTH[@]}" -X POST "$URL/hitl/$HITL_ID/reply" \
   -H 'content-type: application/json' \
@@ -90,4 +90,4 @@ curl -sf "${AUTH[@]}" -X POST "$URL/hitl/$HITL_ID/reply" \
 echo "==> EOD digest"
 curl -sf "${AUTH[@]}" "$URL/digest/eod" | python3 -m json.tool >/dev/null
 
-echo "SMOKE-WEEK3 OK"
+echo "SMOKE-OFFICE OK"

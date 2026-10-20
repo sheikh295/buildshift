@@ -1,6 +1,6 @@
 # Proving Suite PRD (12 tasks)
 
-Twelve disjoint requirements for the Week 2.5 merge-queue proving run.
+Twelve disjoint requirements for the merge-queue proving run.
 
 ## Proving Suite
 

@@ -8,17 +8,18 @@ License: [Apache-2.0](LICENSE)
 
 ## Status
 
-Week 1–2.5 pipeline plus Week 3 **office UI**: Compose stack, orchestrator, PRD → plan → multi-role merge onto proving base, and a Phaser office floor with HITL / plan / EOD / **control-plane** settings (Postgres — not day-to-day `.env` edits).
+Runnable pipeline plus **office UI**: Compose stack, orchestrator, PRD → plan → multi-role merge onto proving base, and a Phaser office floor with HITL / plan / EOD / **control-plane** settings (Postgres — not day-to-day `.env` edits).
 
 ## Quick start (laptop or VPS)
 
 ```bash
 cp .env.example .env
 make up
-make smoke           # Week 1 single task
-make smoke-week2     # Week 2 PRD → plan → multi-role
-make smoke-week25    # Week 2.5: 12 tasks land on base
-make smoke-week3     # Week 3: settings + SSE + HITL + office
+make smoke              # single mock task
+make smoke-plan         # PRD → plan → multi-role
+make smoke-merge-queue  # 12 tasks land on base
+make smoke-office       # settings + SSE + HITL + office
+make smoke-hud          # projects / sprints / usage
 make down
 ```
 

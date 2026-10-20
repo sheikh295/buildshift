@@ -22,6 +22,6 @@ Buildshift turns a large PRD into production web work via planned shifts, isolat
 - Prefer small modules with clear boundaries over a single mega-package.
 - Cost and kill-switch controls are first-class; do not bypass them in “just for now” paths.
 
-## Week-1 scope reminder
+## Core scope reminder
 
-Ship: Compose up/down, task state machine, runner (worktree → worker → push/PR), budgets, kill switch, mock harness. Defer dashboard, PRD indexer, HITL inbox, merge queue polish to later weeks unless the task explicitly expands scope.
+Ship: Compose up/down, task state machine, runner (worktree → worker → push/PR), budgets, kill switch, mock harness, office HUD (projects / sprints / HITL). Expand scope only when the task explicitly requires it.

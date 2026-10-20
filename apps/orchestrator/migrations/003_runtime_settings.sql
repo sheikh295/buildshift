@@ -1,4 +1,4 @@
--- Week 3: control-plane runtime settings (source of truth for operator knobs)
+-- Control-plane runtime settings (source of truth for operator knobs)
 
 CREATE TABLE IF NOT EXISTS runtime_settings (
     id TEXT PRIMARY KEY DEFAULT 'default',

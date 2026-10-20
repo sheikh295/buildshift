@@ -1,6 +1,6 @@
 # Sample Multi-Product PRD
 
-A tiny PRD for Buildshift Week 2 smoke tests.
+A tiny PRD for Buildshift plan / multi-role smoke tests.
 
 ## Identity Platform
 

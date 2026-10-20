@@ -17,9 +17,9 @@ cp .env.example .env
 # .env = secrets + bootstrap. Day-to-day knobs → office Control panel.
 make up    # exports HOST_DATA_DIR for docker-from-docker mounts
 make smoke
-make smoke-week2
-make smoke-week25
-make smoke-week3
+make smoke-plan
+make smoke-merge-queue
+make smoke-office
 ```
 
 `make` sets `HOST_DATA_DIR` to `$(CURDIR)/data` so the orchestrator can ask the host Docker daemon to mount checkouts correctly (required on Docker Desktop and any docker-from-docker setup).
@@ -53,16 +53,17 @@ docker compose exec orchestrator buildshift control settings set '{"limits":{"da
 | `make down-wipe` | Stop and wipe DB volume + local repo cache |
 | `make logs` | Tail orchestrator + dashboard |
 | `make health` | `GET /health` |
-| `make smoke` | Week 1: one mock task end-to-end |
-| `make smoke-week2` | Week 2: PRD → plan approve → multi-role tasks |
-| `make smoke-week25` | Week 2.5: 12 tasks rebase → CI → land on base |
-| `make smoke-week3` | Week 3: settings PUT, SSE, HITL, office up |
+| `make smoke` | One mock task end-to-end |
+| `make smoke-plan` | PRD → plan approve → multi-role tasks |
+| `make smoke-merge-queue` | 12 tasks rebase → CI → land on base |
+| `make smoke-office` | Settings PUT, SSE, HITL, office up |
+| `make smoke-hud` | Projects / sprints / HITL tree / usage |
 | `make kill ARGS=true` | Global kill switch on |
 
-### Week 2 CLI flow
+### Planning CLI flow
 
 ```bash
-# Index a PRD (or use fixtures/sample-prd.md via make smoke-week2)
+# Index a PRD (or use fixtures/sample-prd.md via make smoke-plan)
 curl -s http://127.0.0.1:8080/prd/products | python3 -m json.tool
 
 # Propose + approve a day plan for a product UUID
@@ -74,7 +75,7 @@ curl -s -X POST http://127.0.0.1:8080/plans/<plan_id>/approve
 
 Role → model routing is edited in the office **Control** panel (seeded from `apps/orchestrator/config/router.yaml`; aliases must exist in `services/litellm/config.yaml`).
 
-### Week 2.5 merge queue
+### Merge queue
 
 After reviewer approval the orchestrator, under a single-flight lock:
 
@@ -82,9 +83,9 @@ After reviewer approval the orchestrator, under a single-flight lock:
 2. Runs local CI (`python -m unittest discover -s tests`)
 3. Lands on base (local bare fast-forward, or GitHub PR + merge when tokenized)
 
-`merged` means the change is on the proving base tip — not merely that a PR was opened. `make smoke-week25` indexes [`fixtures/sample-prd-12.md`](../fixtures/sample-prd-12.md), approves 12 tickets, and asserts each owned path exists on `main`.
+`merged` means the change is on the proving base tip — not merely that a PR was opened. `make smoke-merge-queue` indexes [`fixtures/sample-prd-12.md`](../fixtures/sample-prd-12.md), approves 12 tickets, and asserts each owned path exists on `main`.
 
-Enqueue an ad-hoc Week 1 task:
+Enqueue an ad-hoc task:
 
 ```bash
 curl -s http://127.0.0.1:8080/tasks -H 'content-type: application/json' \

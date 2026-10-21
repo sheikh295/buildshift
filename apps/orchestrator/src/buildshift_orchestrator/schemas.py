@@ -93,6 +93,10 @@ class ProjectOut(BaseModel):
     status: str
     prd_path: str | None = None
     has_prd: bool = False
+    context_markdown: str = ""
+    index_status: str = "none"
+    index_error: str | None = None
+    indexed_at: datetime | None = None
     repo_url: str | None = None
     repo_branch: str = "main"
     repo_path: str | None = None
@@ -109,6 +113,7 @@ class ProjectDetailOut(BaseModel):
     modules: list[PrdProductOut]
     sprint_count: int
     open_hitl: int
+    open_backlog: int = 0
 
 
 class ProjectRepoIn(BaseModel):
@@ -128,6 +133,8 @@ class ProjectPrdOut(BaseModel):
     project_id: str
     modules: int
     module_ids: list[str]
+    index_status: str = "ready"
+    cost_usd: float = 0.0
 
 
 class SprintProposeIn(BaseModel):

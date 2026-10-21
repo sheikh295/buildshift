@@ -200,12 +200,23 @@ export function Hud({ tasks, selection, onCloseInspector, onRefresh }: Props) {
             <dt>Working on</dt>
             <dd>{selection.agent.taskTitle || "— idle / roaming —"}</dd>
           </dl>
-          {(selection.agent.role === "planner" ||
-            selection.agent.name === "CTO" ||
-            selection.agent.cabinId === "planner") && (
+          {(selection.agent.role === "cto" ||
+            selection.agent.role === "planner" ||
+            selection.agent.name === "CTO") && (
             <div className="inspector-actions">
               <button type="button" onClick={() => setPanel("cto")}>
                 Chat with CTO
+              </button>
+            </div>
+          )}
+          {(selection.agent.role === "pm" || selection.agent.name === "PM") && (
+            <div className="inspector-actions">
+              <p className="muted">
+                Proposes sprints from the Plan tab (capacity hours → epics &amp; tasks). Prefer open
+                backlog / QA fixes from CTO chat. No separate chat yet — use Plan → Propose.
+              </p>
+              <button type="button" onClick={() => setPanel("plan")}>
+                Open Plan
               </button>
             </div>
           )}
@@ -293,8 +304,9 @@ function CtoChatPanel({
   return (
     <div className="panel-body cto-chat">
       <p className="muted">
-        You are the Boss. Talk to your CTO about this project — priorities, tickets, sprints,
-        blockers, or new work to schedule.
+        You are the Boss. After a sprint, report QA bugs and product changes here — the CTO files
+        backlog items. Then use Plan → Propose so the PM schedules them. Also use for priorities,
+        PRD corrections, and HITL questions.
       </p>
       <ProjectSelect projectId={projectId} onSelect={onSelect} projects={projects} />
       <div className="row">
@@ -342,7 +354,7 @@ function CtoChatPanel({
           rows={3}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          placeholder="e.g. What's left in the current sprint? Add a ticket to fix the login redirect."
+          placeholder="e.g. Login redirect loops on /calculator/us — fix it. Or: Prioritize US tax engine first."
           disabled={!projectId || busy}
         />
       </label>
@@ -487,8 +499,13 @@ function ProjectsPanel({
       {detail && (
         <>
           <p className="muted">
-            {detail.modules.length} modules · {detail.sprint_count} sprints · {detail.open_hitl} open
-            HITL · PRD {detail.project.has_prd ? "uploaded" : "missing"} · repo{" "}
+            {detail.modules.length} modules · {detail.open_backlog ?? 0} open backlog ·{" "}
+            {detail.sprint_count} sprints · {detail.open_hitl} open HITL · index{" "}
+            <span className="tag">{detail.project.index_status || "none"}</span>
+            {detail.project.index_status === "failed" && detail.project.index_error
+              ? ` · ${detail.project.index_error.slice(0, 120)}`
+              : ""}{" "}
+            · PRD {detail.project.has_prd ? "uploaded" : "missing"} · repo{" "}
             {detail.project.has_repo ? "connected" : "not set"}
           </p>
           <fieldset>
@@ -596,7 +613,7 @@ function ProjectsPanel({
                 rows={7}
                 value={markdown}
                 onChange={(e) => setMarkdown(e.target.value)}
-                placeholder="## Module&#10;1. Requirement…"
+                placeholder="Paste the full narrative PRD (CTO indexes with LLM)…"
               />
             </label>
             <div className="row">
@@ -606,19 +623,25 @@ function ProjectsPanel({
                 onClick={async () => {
                   setBusy(true);
                   setErr("");
+                  setMsg("CTO indexing PRD…");
                   try {
                     const r = await orch.uploadPrd(projectId, markdown, sourceName);
-                    setMsg(`Indexed ${r.modules} module(s)`);
+                    setMsg(
+                      `CTO indexed ${r.modules} module(s)${
+                        r.index_status ? ` · ${r.index_status}` : ""
+                      }`
+                    );
                     setDetail(await orch.project(projectId));
                     onChange();
                   } catch (e) {
                     setErr(String(e));
+                    setMsg("");
                   } finally {
                     setBusy(false);
                   }
                 }}
               >
-                Upload / replace PRD
+                {busy ? "CTO indexing…" : "Upload / replace PRD"}
               </button>
               <button
                 type="button"
@@ -626,19 +649,21 @@ function ProjectsPanel({
                 onClick={async () => {
                   setBusy(true);
                   setErr("");
+                  setMsg("CTO reindexing…");
                   try {
                     const r = await orch.reindexPrd(projectId);
-                    setMsg(`Reindexed ${r.modules} module(s)`);
+                    setMsg(`CTO reindexed ${r.modules} module(s)`);
                     setDetail(await orch.project(projectId));
                     onChange();
                   } catch (e) {
                     setErr(String(e));
+                    setMsg("");
                   } finally {
                     setBusy(false);
                   }
                 }}
               >
-                Reindex
+                {busy ? "CTO indexing…" : "Reindex"}
               </button>
             </div>
           </fieldset>
@@ -744,10 +769,11 @@ function PlanPanel({
   const [projects, setProjects] = useState<Project[]>([]);
   const [sprints, setSprints] = useState<Sprint[]>([]);
   const [detail, setDetail] = useState<SprintDetail | null>(null);
+  const [projDetail, setProjDetail] = useState<ProjectDetail | null>(null);
   const [hours, setHours] = useState(6);
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<"propose" | "kickoff" | "pause" | "resume" | null>(null);
 
   useEffect(() => {
     orch.projects().then(setProjects).catch((e) => setErr(String(e)));
@@ -757,8 +783,13 @@ function PlanPanel({
     if (!projectId) {
       setSprints([]);
       setDetail(null);
+      setProjDetail(null);
       return;
     }
+    orch
+      .project(projectId)
+      .then(setProjDetail)
+      .catch((e) => setErr(String(e)));
     orch
       .sprints(projectId)
       .then((list) => {
@@ -769,14 +800,29 @@ function PlanPanel({
       .catch((e) => setErr(String(e)));
   }, [projectId]);
 
+  const indexReady = (projDetail?.project.index_status || "") === "ready";
+  const indexStatus = projDetail?.project.index_status || "none";
+
   return (
     <div className="panel-body">
       <ProjectSelect projectId={projectId} onSelect={onSelect} projects={projects} />
       <p className="muted">
-        <strong>Propose</strong> builds a sprint (tasks stay planned).{" "}
-        <strong>Kick off</strong> starts that sprint — tasks become ready for workers. Hours = planning
-        ceiling (1–40); short remaining work finishes early (not padded).
+        <strong>Propose</strong> asks the PM to pack a sprint from CTO context + open backlog (tasks
+        stay planned). <strong>Kick off</strong> starts that sprint — workers claim ready tasks. Hours
+        = ceiling (1–40). After a sprint, QA via CTO chat → Propose again.
       </p>
+      {projectId && (
+        <p className="muted">
+          Index: <span className="tag">{indexStatus}</span>
+          {!indexReady && indexStatus !== "pending"
+            ? " — upload/reindex the PRD in Projects before Propose"
+            : ""}
+          {indexStatus === "failed" && projDetail?.project.index_error
+            ? ` — ${projDetail.project.index_error.slice(0, 160)}`
+            : ""}
+          {projDetail ? ` · ${projDetail.open_backlog ?? 0} open backlog` : ""}
+        </p>
+      )}
       <label>
         Sprint size (hours)
         <input
@@ -791,37 +837,43 @@ function PlanPanel({
       <div className="row">
         <button
           type="button"
-          disabled={!projectId || busy}
+          disabled={!projectId || !!busy || !indexReady}
+          title={!indexReady ? "CTO must index the PRD first" : "PM proposes sprint"}
           onClick={async () => {
-            setBusy(true);
+            setBusy("propose");
             setErr("");
+            setMsg("PM proposing sprint…");
             try {
               const sp = await orch.proposeSprint(projectId, hours);
-              setMsg(`Proposed sprint ${sp.id.slice(0, 8)} · ~${sp.estimated_hours}h of ≤${hours}h`);
+              setMsg(
+                `PM proposed sprint ${sp.id.slice(0, 8)} · ~${sp.estimated_hours}h of ≤${hours}h`
+              );
               const list = await orch.sprints(projectId);
               setSprints(list);
               setDetail(await orch.sprint(sp.id));
+              setProjDetail(await orch.project(projectId));
               onChange();
             } catch (e) {
               setErr(String(e));
+              setMsg("");
             } finally {
-              setBusy(false);
+              setBusy(null);
             }
           }}
         >
-          Propose sprint
+          {busy === "propose" ? "PM proposing…" : "Propose sprint"}
         </button>
         <button
           type="button"
           disabled={
             !detail ||
             (detail.sprint.status !== "planned" && detail.sprint.status !== "draft") ||
-            busy
+            !!busy
           }
           title="Start workers on this proposed sprint"
           onClick={async () => {
             if (!detail) return;
-            setBusy(true);
+            setBusy("kickoff");
             setErr("");
             try {
               const r = await orch.kickoffSprint(detail.sprint.id);
@@ -832,20 +884,20 @@ function PlanPanel({
             } catch (e) {
               setErr(String(e));
             } finally {
-              setBusy(false);
+              setBusy(null);
             }
           }}
         >
-          Kick off sprint
+          {busy === "kickoff" ? "Starting…" : "Kick off sprint"}
         </button>
       </div>
       <div className="row">
         <button
           type="button"
-          disabled={!detail || detail.sprint.status !== "active" || busy}
+          disabled={!detail || detail.sprint.status !== "active" || !!busy}
           onClick={async () => {
             if (!detail) return;
-            setBusy(true);
+            setBusy("pause");
             setErr("");
             try {
               const r = await orch.pauseSprint(detail.sprint.id);
@@ -856,7 +908,7 @@ function PlanPanel({
             } catch (e) {
               setErr(String(e));
             } finally {
-              setBusy(false);
+              setBusy(null);
             }
           }}
         >
@@ -867,11 +919,11 @@ function PlanPanel({
           disabled={
             !detail ||
             (detail.sprint.status !== "paused" && detail.sprint.status !== "pausing") ||
-            busy
+            !!busy
           }
           onClick={async () => {
             if (!detail) return;
-            setBusy(true);
+            setBusy("resume");
             setErr("");
             try {
               const r = await orch.resumeSprint(detail.sprint.id);
@@ -882,7 +934,7 @@ function PlanPanel({
             } catch (e) {
               setErr(String(e));
             } finally {
-              setBusy(false);
+              setBusy(null);
             }
           }}
         >

@@ -10,11 +10,13 @@ from buildshift_orchestrator.config import get_settings
 
 DEFAULT_ROUTER: dict[str, Any] = {
     "roles": {
-        "prd_indexer": {"tier": "T2", "model": "claude-sonnet-4-5"},
-        "planner": {"tier": "T3", "model": "claude-sonnet-4-5"},
-        "test_author": {"tier": "T1", "model": "claude-sonnet-4-5"},
-        "implementer": {"tier": "T1", "model": "claude-sonnet-4-5", "escalate_to": "T2"},
-        "reviewer": {"tier": "T2", "model": "claude-haiku-4-5"},
+        "cto": {"tier": "T3", "model": "claude-haiku-5-5"},
+        "pm": {"tier": "T3", "model": "claude-haiku-5-5"},
+        "planner": {"tier": "T3", "model": "claude-haiku-5-5"},  # legacy alias → cto
+        "prd_indexer": {"tier": "T2", "model": "claude-haiku-5-5"},  # unused; prefer cto
+        "test_author": {"tier": "T1", "model": "claude-haiku-5-5"},
+        "implementer": {"tier": "T1", "model": "claude-haiku-5-5", "escalate_to": "T2"},
+        "reviewer": {"tier": "T2", "model": "claude-haiku-5-5"},
     },
     "limits": {
         "task_budget_usd": 3.0,
@@ -59,13 +61,25 @@ def load_router() -> dict[str, Any]:
 
 def role_model(role: str) -> str:
     roles = load_router().get("roles") or {}
-    entry = roles.get(role) or roles.get("implementer") or {}
+    entry = roles.get(role)
+    if not entry and role == "cto":
+        entry = roles.get("planner")
+    if not entry and role == "pm":
+        entry = roles.get("cto") or roles.get("planner")
+    if not entry:
+        entry = roles.get("implementer") or {}
     return str(entry.get("model") or get_settings().default_implementer_model)
 
 
 def role_tier(role: str) -> str:
     roles = load_router().get("roles") or {}
-    entry = roles.get(role) or {}
+    entry = roles.get(role)
+    if not entry and role == "cto":
+        entry = roles.get("planner")
+    if not entry and role == "pm":
+        entry = roles.get("cto") or roles.get("planner")
+    if not entry:
+        entry = {}
     return str(entry.get("tier") or "T1")
 
 

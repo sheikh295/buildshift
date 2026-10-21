@@ -145,6 +145,8 @@ export function ensureOfficeTextures(scene: Phaser.Scene) {
   ticket.destroy();
 
   const roleColors: Record<string, { shirt: number; skin: number; hair: number }> = {
+    cto: { shirt: 0x2563eb, skin: 0xf0c9a0, hair: 0x3b2f2f },
+    pm: { shirt: 0x1d4ed8, skin: 0xe8b896, hair: 0x4a3728 },
     planner: { shirt: 0x2563eb, skin: 0xf0c9a0, hair: 0x3b2f2f },
     implementer: { shirt: 0xd97706, skin: 0xe8b896, hair: 0x1a1a1a },
     test_author: { shirt: 0x0d9488, skin: 0xf2d2b0, hair: 0x6b4423 },

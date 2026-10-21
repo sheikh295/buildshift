@@ -86,28 +86,31 @@ make down               # stop (keep data)
 In the office **Projects** tab (or via API):
 
 1. Create a project (this is the product you are building).
-2. Upload or paste a markdown PRD (`##` sections become modules).
+2. Upload or paste a narrative PRD — the **CTO** LLM indexes modules, requirements, and living context (not heading scrapes).
 3. Reindex when the PRD changes.
 
 ### 2. Plan and kick off a sprint
 
 In **Plan**:
 
-1. Select the project.
+1. Select the project (index must be `ready`).
 2. Choose sprint size in **hours** (1–40) — a ceiling, not a pad target.
-3. **Propose sprint** — builds epics/tasks from remaining work.
-4. Review the hierarchy.
+3. **Propose sprint** — the **PM** LLM packs epics/tasks from CTO context, preferring open backlog.
+4. Review the hierarchy on the Board.
 5. **Kick off sprint** — tasks become ready; workers start claiming them.
 
 Use **Pause** / **Resume** when you need to stop new work without aborting mid-stage.
 
+After a sprint: **Chat with CTO** to file QA fixes into the backlog, then Propose again.
+
 ### 3. Steer and unblock
 
+- **CTO chat** — priorities, PRD corrections, post-sprint QA (writes backlog / context).
 - **Inbox** — answer HITL items (nested by project and sprint).
 - **Board** — inspect sprint / epic / task standing.
 - **EOD** — pick a date (and optional project) for the day’s digest.
 - **Usage** — spend and model mix over a range.
-- **Control** — budgets, models, harness, kill switch, proving repo.
+- **Control** — budgets, models (`cto` / `pm` / workers), harness, kill switch, proving repo.
 
 ### 4. Connect each project's git repo
 

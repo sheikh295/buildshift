@@ -182,6 +182,10 @@ def _project_out(p: Project) -> ProjectOut:
         status=p.status,
         prd_path=p.prd_path,
         has_prd=bool((p.prd_markdown or "").strip() or p.prd_path),
+        context_markdown=p.context_markdown or "",
+        index_status=p.index_status or "none",
+        index_error=p.index_error,
+        indexed_at=p.indexed_at,
         repo_url=p.repo_url,
         repo_branch=p.repo_branch or "main",
         repo_path=p.repo_path,
@@ -217,6 +221,7 @@ def projects_get(project_id: uuid.UUID, db: Session = Depends(get_db)) -> Projec
         modules=[PrdProductOut.model_validate(m) for m in detail["modules"]],
         sprint_count=detail["sprint_count"],
         open_hitl=detail["open_hitl"],
+        open_backlog=detail.get("open_backlog") or 0,
     )
 
 
@@ -271,10 +276,19 @@ def projects_upload_prd(
             body.markdown,
             docs_root=docs,
             source_name=body.source_name,
+            settings=effective_settings(settings),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return ProjectPrdOut(**result)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return ProjectPrdOut(
+        project_id=result["project_id"],
+        modules=result["modules"],
+        module_ids=result["module_ids"],
+        index_status=result.get("index_status") or "ready",
+        cost_usd=float(result.get("cost_usd") or 0),
+    )
 
 
 @router.post("/projects/{project_id}/reindex", response_model=ProjectPrdOut)
@@ -285,10 +299,23 @@ def projects_reindex(
 ) -> ProjectPrdOut:
     try:
         docs = _prd_docs_root(settings, project_id=project_id, db=db)
-        result = sprint_svc.reindex_prd(db, project_id, docs_root=docs)
+        result = sprint_svc.reindex_prd(
+            db,
+            project_id,
+            docs_root=docs,
+            settings=effective_settings(settings),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return ProjectPrdOut(**result)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return ProjectPrdOut(
+        project_id=result["project_id"],
+        modules=result["modules"],
+        module_ids=result["module_ids"],
+        index_status=result.get("index_status") or "ready",
+        cost_usd=float(result.get("cost_usd") or 0),
+    )
 
 
 @router.get("/projects/{project_id}/cto/chat", response_model=list[CtoChatMessageOut])
@@ -501,18 +528,23 @@ def prd_index(
     settings: Settings = Depends(get_settings),
     project_id: uuid.UUID | None = Query(None),
 ) -> PrdIndexOut:
-    """Legacy global index; prefer POST /projects/{id}/prd. Optional project_id scopes modules."""
+    """Legacy global index; prefer POST /projects/{id}/prd. Requires project_id for CTO LLM index."""
+    if project_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="project_id is required; use POST /projects/{id}/prd for CTO indexing",
+        )
     try:
-        docs = _prd_docs_root(settings)
-        if project_id:
-            sprint_svc.upload_prd(
-                db, project_id, body.markdown, docs_root=docs, source_name=body.source_name
-            )
-            products = list_products(db, project_id=project_id)
-        else:
-            products = index_prd_markdown(
-                db, body.markdown, docs_root=docs, source_name=body.source_name
-            )
+        docs = _prd_docs_root(settings, project_id=project_id, db=db)
+        sprint_svc.upload_prd(
+            db,
+            project_id,
+            body.markdown,
+            docs_root=docs,
+            source_name=body.source_name,
+            settings=effective_settings(settings),
+        )
+        products = list_products(db, project_id=project_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return PrdIndexOut(products=products)

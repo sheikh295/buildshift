@@ -22,7 +22,8 @@
       "h": 608,
       "accent": "#3d8bfd",
       "permanent": [
-        { "id": "planner-1", "name": "CTO", "role": "planner", "seat": 0 }
+        { "id": "planner-1", "name": "CTO", "role": "cto", "seat": 0 },
+        { "id": "pm-1", "name": "PM", "role": "pm", "seat": 1 }
       ],
       "maxHire": 0,
       "desks": [
@@ -112,6 +113,8 @@
     }
   ],
   "roles": {
+    "cto": { "color": "#3d8bfd", "shirt": "#2563eb", "skin": "#f0c9a0" },
+    "pm": { "color": "#60a5fa", "shirt": "#1d4ed8", "skin": "#e8b896" },
     "planner": { "color": "#3d8bfd", "shirt": "#2563eb", "skin": "#f0c9a0" },
     "implementer": { "color": "#f0a202", "shirt": "#d97706", "skin": "#e8b896" },
     "test_author": { "color": "#2dd4a8", "shirt": "#0d9488", "skin": "#f2d2b0" },

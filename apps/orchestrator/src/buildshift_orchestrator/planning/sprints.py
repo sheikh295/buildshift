@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from buildshift_orchestrator.config import Settings
+from buildshift_orchestrator.control import add_daily_spend, is_kill_switch_on, under_daily_budget
 from buildshift_orchestrator.events import emit
 from buildshift_orchestrator.models import (
     BacklogItem,
@@ -22,13 +23,12 @@ from buildshift_orchestrator.models import (
     Task,
     TaskState,
 )
-from buildshift_orchestrator.prd.indexer import index_prd_markdown
+from buildshift_orchestrator.planning.cto_index import index_prd_with_cto
+from buildshift_orchestrator.planning.llm import call_role_llm
 from buildshift_orchestrator.router_config import role_tier, router_limits
 from buildshift_orchestrator.runner import gitops
 from buildshift_orchestrator.runner.locks import owned_paths_overlap
-
-# Rough hours per ticket — capacity is a ceiling, not a pad target
-HOURS_PER_TICKET = Decimal("1.0")
+from buildshift_orchestrator.runtime_settings import effective_settings
 
 
 def _slugify(title: str) -> str:
@@ -140,41 +140,38 @@ def upload_prd(
     *,
     docs_root=None,
     source_name: str = "uploaded.md",
+    settings: Settings | None = None,
 ) -> dict:
-    project = db.get(Project, project_id)
-    if project is None:
-        raise ValueError("project not found")
-    project.prd_markdown = markdown
-    project.updated_at = datetime.now(timezone.utc)
-    db.flush()
-    modules = index_prd_markdown(
+    """Store PRD and run CTO LLM indexing (no regex scrape)."""
+    if settings is None:
+        raise ValueError("settings required for CTO PRD indexing")
+    return index_prd_with_cto(
         db,
+        settings,
+        project_id,
         markdown,
-        project_id=project.id,
         docs_root=docs_root,
         source_name=source_name,
     )
-    if docs_root is not None:
-        path = docs_root / f"{project.slug}.prd.md"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(markdown)
-        project.prd_path = str(path)
-        db.commit()
-    return {
-        "project_id": str(project.id),
-        "modules": len(modules),
-        "module_ids": [str(m.id) for m in modules],
-    }
 
 
-def reindex_prd(db: Session, project_id: uuid.UUID, *, docs_root=None) -> dict:
+def reindex_prd(
+    db: Session,
+    project_id: uuid.UUID,
+    *,
+    docs_root=None,
+    settings: Settings | None = None,
+) -> dict:
     project = db.get(Project, project_id)
     if project is None:
         raise ValueError("project not found")
     if not (project.prd_markdown or "").strip():
         raise ValueError("project has no stored PRD; upload first")
-    return upload_prd(
+    if settings is None:
+        raise ValueError("settings required for CTO reindex")
+    return index_prd_with_cto(
         db,
+        settings,
         project_id,
         project.prd_markdown,
         docs_root=docs_root,
@@ -209,75 +206,147 @@ def project_detail(db: Session, project_id: uuid.UUID) -> dict:
         )
         or 0
     )
+    module_ids = [m.id for m in modules]
+    open_backlog = 0
+    if module_ids:
+        open_backlog = (
+            db.scalar(
+                select(func.count())
+                .select_from(BacklogItem)
+                .where(
+                    BacklogItem.product_id.in_(module_ids),
+                    BacklogItem.status == "open",
+                )
+            )
+            or 0
+        )
     return {
         "project": project,
         "modules": modules,
         "sprint_count": int(sprint_count),
         "open_hitl": int(open_hitl),
+        "open_backlog": int(open_backlog),
     }
 
 
-def _collect_candidates(db: Session, project_id: uuid.UUID, settings: Settings) -> list[dict]:
-    """Backlog + untraced requirements across modules, ordered by build_order."""
+PM_SPRINT_SYSTEM = """You are the Product Manager of an AI software house (Buildshift).
+The Boss asked you to propose a time-boxed sprint from the CTO's project index and open backlog.
+
+Return ONLY JSON:
+{
+  "goals": ["sprint goal bullets"],
+  "epics": [
+    {
+      "title": "Epic title",
+      "summary": "What this epic delivers",
+      "product_id": "<optional uuid of a module from context>",
+      "tasks": [
+        {
+          "title": "Concrete developer task",
+          "acceptance_criteria": "Testable done-when statement",
+          "owned_paths": ["real/repo/paths/..."],
+          "difficulty": "easy|normal|hard",
+          "estimated_hours": 1.5,
+          "backlog_id": "<optional uuid from open_backlog>",
+          "req_ids": ["optional requirement uuids"]
+        }
+      ]
+    }
+  ]
+}
+
+Rules:
+- Total of all estimated_hours MUST be ≤ capacity_hours (do not pad; fewer tasks OK).
+- Prefer open_backlog items before inventing new PRD-derived work (QA fixes first).
+- Tasks must be implementable by coding agents: real acceptance criteria and owned_paths.
+- owned_paths should fit a typical Next.js/TS repo when unknown (e.g. app/, packages/, lib/).
+- Group related tasks under epics. 1–4 epics typical for short sprints.
+"""
+
+
+def _pm_project_snapshot(db: Session, project: Project) -> dict:
     modules = list(
         db.scalars(
             select(PrdProduct)
-            .where(PrdProduct.project_id == project_id)
+            .where(PrdProduct.project_id == project.id)
             .order_by(PrdProduct.build_order)
         )
     )
-    candidates: list[dict] = []
-    for product in modules:
-        open_backlog = list(
-            db.scalars(
-                select(BacklogItem)
-                .where(
-                    BacklogItem.product_id == product.id,
-                    BacklogItem.status == "open",
-                )
-                .order_by(BacklogItem.sort_order)
-            )
-        )
-        for item in open_backlog:
-            candidates.append(
-                {
-                    "product_id": product.id,
-                    "product_title": product.title,
-                    "title": item.title,
-                    "acceptance_criteria": item.acceptance_criteria,
-                    "owned_paths": item.owned_paths,
-                    "difficulty": item.difficulty,
-                    "estimated_spend_usd": float(item.estimated_spend_usd),
-                    "estimated_hours": float(HOURS_PER_TICKET),
-                    "req_ids": item.req_ids,
-                    "backlog_id": str(item.id),
-                }
-            )
+    module_payload = []
+    backlog_payload = []
+    for m in modules:
         reqs = list(
             db.scalars(
                 select(PrdRequirement)
-                .where(PrdRequirement.product_id == product.id, PrdRequirement.traced.is_(False))
+                .where(PrdRequirement.product_id == m.id)
                 .order_by(PrdRequirement.sort_order)
             )
         )
-        for req in reqs:
-            slug = product.slug.replace("-", "_")
-            path = f"src/{slug}/{req.req_key.lower()}.md"
-            candidates.append(
+        module_payload.append(
+            {
+                "id": str(m.id),
+                "title": m.title,
+                "slug": m.slug,
+                "summary": m.summary,
+                "build_order": m.build_order,
+                "requirements": [
+                    {
+                        "id": str(r.id),
+                        "req_key": r.req_key,
+                        "text": r.text,
+                        "traced": r.traced,
+                    }
+                    for r in reqs
+                ],
+            }
+        )
+        for item in db.scalars(
+            select(BacklogItem)
+            .where(BacklogItem.product_id == m.id, BacklogItem.status == "open")
+            .order_by(BacklogItem.sort_order)
+        ):
+            backlog_payload.append(
                 {
-                    "product_id": product.id,
-                    "product_title": product.title,
-                    "title": f"{product.title}: {req.req_key}",
-                    "acceptance_criteria": req.text,
-                    "owned_paths": [path],
-                    "difficulty": "normal",
-                    "estimated_spend_usd": float(settings.task_budget_usd) / 2,
-                    "estimated_hours": float(HOURS_PER_TICKET),
-                    "req_ids": [str(req.id)],
-                    "backlog_id": None,
+                    "id": str(item.id),
+                    "product_id": str(m.id),
+                    "title": item.title,
+                    "acceptance_criteria": item.acceptance_criteria,
+                    "owned_paths": item.owned_paths or [],
+                    "difficulty": item.difficulty,
                 }
             )
-    return candidates
+
+    recent_tasks = list(
+        db.scalars(
+            select(Task)
+            .where(Task.project_id == project.id)
+            .order_by(Task.updated_at.desc())
+            .limit(40)
+        )
+    )
+    return {
+        "project": {
+            "id": str(project.id),
+            "title": project.title,
+            "slug": project.slug,
+            "repo_url": project.repo_url,
+            "repo_branch": project.repo_branch,
+            "context_markdown": project.context_markdown or "",
+            "index_status": project.index_status,
+        },
+        "modules": module_payload,
+        "open_backlog": backlog_payload,
+        "recent_tasks": [
+            {
+                "id": str(t.id),
+                "title": t.title,
+                "state": t.state,
+                "error": t.error,
+                "acceptance_criteria": (t.acceptance_criteria or "")[:400],
+            }
+            for t in recent_tasks
+        ],
+    }
 
 
 def propose_sprint(
@@ -288,9 +357,15 @@ def propose_sprint(
     capacity_hours: float = 6.0,
     mode: str = "hours",
 ) -> Sprint:
+    """PM LLM proposes sprint/epics/tasks from CTO index + open backlog."""
     project = db.get(Project, project_id)
     if project is None:
         raise ValueError("project not found")
+    if (project.index_status or "") != "ready":
+        raise ValueError(
+            "CTO has not indexed this PRD yet — upload/reindex the PRD first "
+            f"(index_status={project.index_status or 'none'})"
+        )
     try:
         hours_req = float(capacity_hours)
     except (TypeError, ValueError) as exc:
@@ -298,43 +373,91 @@ def propose_sprint(
     if hours_req < 1 or hours_req > 40:
         raise ValueError("capacity_hours must be between 1 and 40")
 
+    if is_kill_switch_on(db):
+        raise ValueError("kill switch is on — PM planning paused")
+    eff = effective_settings(settings)
+    if not under_daily_budget(db, eff):
+        raise ValueError("daily budget exhausted — PM planning paused")
+
     cap = Decimal(str(hours_req))
-    candidates = _collect_candidates(db, project_id, settings)
-    selected: list[dict] = []
-    hours = Decimal("0")
-    spend = Decimal("0")
-    for c in candidates:
-        h = Decimal(str(c["estimated_hours"]))
-        # Ceiling: stop once we would exceed capacity (unless nothing selected yet — take at least one if any work)
-        if selected and hours + h > cap:
-            break
-        selected.append(c)
-        hours += h
-        spend += Decimal(str(c["estimated_spend_usd"]))
-        if hours >= cap:
-            break
+    snapshot = _pm_project_snapshot(db, project)
+    import json as _json
 
-    sprint = Sprint(
-        id=uuid.uuid4(),
-        project_id=project.id,
-        mode=mode or "hours",
-        status="planned",
-        capacity_hours=cap,
-        goals=[
-            f"Sprint for {project.title}",
-            f"Plan ceiling ≤ {cap}h (not padded if less work remains)",
-            f"{len(selected)} tasks from remaining backlog",
-        ],
-        estimated_spend_usd=spend,
-        estimated_hours=hours,
+    user_content = (
+        f"Propose a sprint with capacity_hours={float(cap)}.\n\n"
+        f"## Project snapshot\n```json\n{_json.dumps(snapshot, indent=2, default=str)[:100_000]}\n```"
     )
-    db.add(sprint)
-    db.flush()
 
-    # Group into epics by module
-    by_product: dict[uuid.UUID, list[dict]] = {}
-    for c in selected:
-        by_product.setdefault(c["product_id"], []).append(c)
+    parsed, cost = call_role_llm(
+        eff,
+        "pm",
+        [
+            {"role": "system", "content": PM_SPRINT_SYSTEM},
+            {"role": "user", "content": user_content},
+        ],
+        temperature=0.3,
+    )
+
+    epics_data = parsed.get("epics") or []
+    if not isinstance(epics_data, list) or not epics_data:
+        # One repair attempt if empty
+        parsed, cost2 = call_role_llm(
+            eff,
+            "pm",
+            [
+                {"role": "system", "content": PM_SPRINT_SYSTEM},
+                {"role": "user", "content": user_content},
+                {
+                    "role": "user",
+                    "content": "Your previous response had no epics. Return a valid plan with at least one epic and tasks within capacity.",
+                },
+            ],
+            temperature=0.2,
+        )
+        cost += cost2
+        epics_data = parsed.get("epics") or []
+    if not isinstance(epics_data, list) or not epics_data:
+        raise ValueError("PM returned no epics/tasks")
+
+    # Validate / trim hours
+    total_h = Decimal("0")
+    for epic in epics_data:
+        for t in epic.get("tasks") or []:
+            try:
+                total_h += Decimal(str(t.get("estimated_hours") or 1))
+            except Exception:
+                total_h += Decimal("1")
+    if total_h > cap * Decimal("1.15"):
+        # Soft overage: ask repair once
+        parsed, cost2 = call_role_llm(
+            eff,
+            "pm",
+            [
+                {"role": "system", "content": PM_SPRINT_SYSTEM},
+                {"role": "user", "content": user_content},
+                {
+                    "role": "assistant",
+                    "content": _json.dumps(parsed),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Total estimated_hours={float(total_h)} exceeds capacity {float(cap)}. "
+                        "Return a revised JSON plan that fits ≤ capacity."
+                    ),
+                },
+            ],
+            temperature=0.2,
+        )
+        cost += cost2
+        epics_data = parsed.get("epics") or epics_data
+
+    goals = parsed.get("goals") or [
+        f"Sprint for {project.title}",
+        f"Capacity ≤ {cap}h",
+    ]
+    if not isinstance(goals, list):
+        goals = [str(goals)]
 
     limits = router_limits()
     max_attempts = max(
@@ -343,46 +466,97 @@ def propose_sprint(
     )
     budget = Decimal(str(limits.get("task_budget_usd") or settings.task_budget_usd))
 
-    sort_i = 0
+    hours = Decimal("0")
+    spend = Decimal("0")
     created_tasks: list[Task] = []
-    for product_id, tickets in by_product.items():
-        title = tickets[0]["product_title"]
-        product = db.get(PrdProduct, product_id)
+
+    sprint = Sprint(
+        id=uuid.uuid4(),
+        project_id=project.id,
+        mode=mode or "hours",
+        status="planned",
+        capacity_hours=cap,
+        goals=[str(g) for g in goals][:20],
+        estimated_spend_usd=Decimal("0"),
+        estimated_hours=Decimal("0"),
+    )
+    db.add(sprint)
+    db.flush()
+
+    default_product = db.scalar(
+        select(PrdProduct)
+        .where(PrdProduct.project_id == project.id)
+        .order_by(PrdProduct.build_order)
+    )
+
+    for sort_i, epic_raw in enumerate(epics_data):
+        title = str(epic_raw.get("title") or f"Epic {sort_i + 1}").strip()
+        summary = str(epic_raw.get("summary") or "")
+        product_id = None
+        if epic_raw.get("product_id"):
+            try:
+                product_id = uuid.UUID(str(epic_raw["product_id"]))
+            except ValueError:
+                product_id = None
+        if product_id is None and default_product:
+            product_id = default_product.id
+
         epic = Epic(
             id=uuid.uuid4(),
             sprint_id=sprint.id,
             project_id=project.id,
             product_id=product_id,
             title=title,
-            summary=(product.summary if product else "") or "",
+            summary=summary,
             status="planned",
             sort_order=sort_i,
         )
-        sort_i += 1
         db.add(epic)
         db.flush()
 
-        for ticket in tickets:
+        for ticket in epic_raw.get("tasks") or []:
+            t_title = str(ticket.get("title") or "").strip()
+            if not t_title:
+                continue
+            try:
+                est_h = Decimal(str(ticket.get("estimated_hours") or 1))
+            except Exception:
+                est_h = Decimal("1")
+            if est_h <= 0:
+                est_h = Decimal("1")
+            # Hard stop if we would far exceed capacity after at least one task
+            if created_tasks and hours + est_h > cap:
+                continue
+
+            criteria = str(ticket.get("acceptance_criteria") or "")
+            paths = list(ticket.get("owned_paths") or [])
+            difficulty = str(ticket.get("difficulty") or "normal")
+            req_ids = [str(x) for x in (ticket.get("req_ids") or [])]
+
             backlog_id = ticket.get("backlog_id")
             if backlog_id:
-                item = db.get(BacklogItem, uuid.UUID(backlog_id))
-                if item:
-                    item.status = "scheduled"
+                try:
+                    item = db.get(BacklogItem, uuid.UUID(str(backlog_id)))
+                    if item:
+                        item.status = "scheduled"
+                except ValueError:
+                    pass
             else:
-                item = BacklogItem(
-                    id=uuid.uuid4(),
-                    product_id=product_id,
-                    title=ticket["title"],
-                    acceptance_criteria=ticket.get("acceptance_criteria") or "",
-                    owned_paths=ticket.get("owned_paths") or [],
-                    difficulty=ticket.get("difficulty") or "normal",
-                    estimated_spend_usd=Decimal(str(ticket.get("estimated_spend_usd") or 1)),
-                    req_ids=ticket.get("req_ids") or [],
-                    status="scheduled",
+                db.add(
+                    BacklogItem(
+                        id=uuid.uuid4(),
+                        product_id=product_id,
+                        title=t_title,
+                        acceptance_criteria=criteria,
+                        owned_paths=paths,
+                        difficulty=difficulty,
+                        estimated_spend_usd=budget / 2,
+                        req_ids=req_ids,
+                        status="scheduled",
+                    )
                 )
-                db.add(item)
 
-            for req_id in ticket.get("req_ids") or []:
+            for req_id in req_ids:
                 try:
                     req = db.get(PrdRequirement, uuid.UUID(str(req_id)))
                     if req:
@@ -392,15 +566,14 @@ def propose_sprint(
 
             task = Task(
                 id=uuid.uuid4(),
-                title=ticket["title"],
-                # Stay planned until sprint kickoff
+                title=t_title,
                 state=TaskState.planned.value,
                 role="test_author",
                 stage="test_author",
                 tier=role_tier("test_author"),
-                difficulty=ticket.get("difficulty") or "normal",
-                acceptance_criteria=ticket.get("acceptance_criteria") or "",
-                owned_paths=ticket.get("owned_paths") or [],
+                difficulty=difficulty,
+                acceptance_criteria=criteria,
+                owned_paths=paths,
                 budget_usd=budget,
                 max_attempts=max_attempts,
                 product_id=product_id,
@@ -408,11 +581,17 @@ def propose_sprint(
                 sprint_id=sprint.id,
                 epic_id=epic.id,
                 parent_epic=title,
-                req_ids=ticket.get("req_ids") or [],
+                req_ids=req_ids,
                 deps=[],
             )
             db.add(task)
             created_tasks.append(task)
+            hours += est_h
+            spend += budget / 2
+
+    if not created_tasks:
+        db.rollback()
+        raise ValueError("PM plan produced no tasks")
 
     db.flush()
     for i, task in enumerate(created_tasks):
@@ -422,10 +601,13 @@ def propose_sprint(
                 deps.append(str(prev.id))
         task.deps = deps
 
+    sprint.estimated_hours = hours
+    sprint.estimated_spend_usd = spend
+    add_daily_spend(db, cost)
     emit(
         db,
-        kind="sprint.proposed",
-        summary=f"Sprint {sprint.id}: {len(created_tasks)} tasks, ~{hours}h (cap {cap}h)",
+        kind="pm.sprint_proposed",
+        summary=f"PM sprint: {len(created_tasks)} tasks, ~{hours}h (cap {cap}h)",
         payload={
             "sprint_id": str(sprint.id),
             "project_id": str(project.id),
@@ -434,7 +616,16 @@ def propose_sprint(
             "capacity_hours": float(cap),
             "mode": mode,
         },
-        role="planner",
+        role="pm",
+        cost_usd=cost,
+    )
+    # Keep legacy event name for HUD filters
+    emit(
+        db,
+        kind="sprint.proposed",
+        summary=f"Sprint {sprint.id}: {len(created_tasks)} tasks, ~{hours}h (cap {cap}h)",
+        payload={"sprint_id": str(sprint.id), "project_id": str(project.id)},
+        role="pm",
     )
     db.commit()
     db.refresh(sprint)

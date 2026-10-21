@@ -7,7 +7,6 @@ import uuid
 from decimal import Decimal
 from typing import Any
 
-import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -20,26 +19,27 @@ from buildshift_orchestrator.models import (
     Epic,
     HumanItem,
     PrdProduct,
+    PrdRequirement,
     Project,
     Sprint,
     Task,
 )
-from buildshift_orchestrator.router_config import role_model
+from buildshift_orchestrator.planning.llm import call_role_llm
 from buildshift_orchestrator.runtime_settings import effective_settings
 
 log = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """You are the CTO of an AI software house called Buildshift.
 The person messaging you is the Boss / CEO. Speak peer-to-peer: crisp, candid, respectful, no fluff.
-You own planning — sprints, epics, tickets, priorities, technical tradeoffs, and unblocking work.
+You own the project's indexed understanding and living context. The PM turns open backlog into sprints.
 
-You receive a live snapshot of the selected project (PRD modules, sprints, epics, tasks with
-acceptance criteria, HITL items, backlog). Use that as ground truth; do not invent merged work.
+You receive a live snapshot (context_markdown, modules/requirements, open backlog, recent tasks,
+HITL). Use that as ground truth.
 
-When the CEO asks you to change the plan or add work, include a JSON actions array.
-When they only want discussion, return an empty actions array.
+When the CEO reports QA bugs, product changes, or new work after a sprint, file durable backlog
+items (do NOT kick off workers). When they change product direction, update context/modules.
 
-Respond with ONLY a JSON object (no markdown fence):
+Respond with ONLY a JSON object:
 {
   "reply": "<markdown for the CEO>",
   "actions": [
@@ -48,7 +48,24 @@ Respond with ONLY a JSON object (no markdown fence):
       "title": "...",
       "acceptance_criteria": "...",
       "owned_paths": ["path/or/glob"],
-      "product_id": "<optional uuid from context>"
+      "product_id": "<optional uuid>",
+      "difficulty": "normal"
+    },
+    { "type": "update_context", "context_markdown": "full replacement living brief" },
+    {
+      "type": "upsert_module",
+      "product_id": "<optional existing uuid>",
+      "title": "...",
+      "slug": "...",
+      "summary": "...",
+      "build_order": 20
+    },
+    {
+      "type": "upsert_requirement",
+      "product_id": "<module uuid>",
+      "req_key": "R1",
+      "text": "...",
+      "requirement_id": "<optional existing uuid to update>"
     },
     {
       "type": "update_task",
@@ -56,16 +73,13 @@ Respond with ONLY a JSON object (no markdown fence):
       "title": "<optional>",
       "acceptance_criteria": "<optional>"
     },
-    {
-      "type": "create_hitl",
-      "summary": "..."
-    }
+    { "type": "create_hitl", "summary": "..." }
   ]
 }
 
 Rules:
-- Prefer add_backlog for new work (it enters the next sprint proposal).
-- Prefer update_task only for existing task UUIDs in the snapshot.
+- Post-sprint fixes/changes → prefer add_backlog (PM will schedule on next Propose).
+- Do not start workers or mutate active sprint in-flight tasks except update_task when clarifying.
 - Keep reply concise unless the CEO asks for depth.
 """
 
@@ -113,14 +127,16 @@ def build_project_context(db: Session, project: Project) -> str:
             .limit(80)
         )
     )
-    backlog = list(
-        db.scalars(
-            select(BacklogItem)
-            .where(
-                BacklogItem.product_id.in_([m.id for m in modules]) if modules else False
+    backlog = (
+        list(
+            db.scalars(
+                select(BacklogItem)
+                .where(
+                    BacklogItem.product_id.in_([m.id for m in modules]),
+                    BacklogItem.status == "open",
+                )
+                .limit(40)
             )
-            .where(BacklogItem.status == "open")
-            .limit(40)
         )
         if modules
         else []
@@ -137,6 +153,16 @@ def build_project_context(db: Session, project: Project) -> str:
     for t in tasks:
         by_state[t.state] = by_state.get(t.state, 0) + 1
 
+    reqs: list[PrdRequirement] = []
+    if modules:
+        reqs = list(
+            db.scalars(
+                select(PrdRequirement).where(
+                    PrdRequirement.product_id.in_([m.id for m in modules])
+                )
+            )
+        )
+
     payload = {
         "project": {
             "id": str(project.id),
@@ -144,6 +170,8 @@ def build_project_context(db: Session, project: Project) -> str:
             "title": project.title,
             "repo_url": project.repo_url,
             "repo_branch": project.repo_branch,
+            "index_status": getattr(project, "index_status", None) or "pending",
+            "context_markdown": (project.context_markdown or "")[:12000],
             "has_prd": bool((project.prd_markdown or "").strip()),
             "prd_excerpt": (project.prd_markdown or "")[:6000],
         },
@@ -154,8 +182,19 @@ def build_project_context(db: Session, project: Project) -> str:
                 "title": m.title,
                 "summary": m.summary,
                 "status": m.status,
+                "build_order": m.build_order,
             }
             for m in modules
+        ],
+        "requirements": [
+            {
+                "id": str(r.id),
+                "product_id": str(r.product_id),
+                "req_key": r.req_key,
+                "text": r.text,
+                "status": r.status,
+            }
+            for r in reqs[:120]
         ],
         "task_counts_by_state": by_state,
         "sprints": [
@@ -202,58 +241,6 @@ def build_project_context(db: Session, project: Project) -> str:
     return json.dumps(payload, indent=2, default=str)
 
 
-def _parse_llm_json(text: str) -> dict[str, Any]:
-    raw = (text or "").strip()
-    if raw.startswith("```"):
-        raw = re.sub(r"^```(?:json)?\s*", "", raw)
-        raw = re.sub(r"\s*```$", "", raw)
-    try:
-        data = json.loads(raw)
-        if isinstance(data, dict):
-            return data
-    except json.JSONDecodeError:
-        pass
-    # Fallback: treat whole body as reply
-    return {"reply": text.strip(), "actions": []}
-
-
-def _call_litellm(settings: Settings, messages: list[dict[str, str]]) -> tuple[str, Decimal]:
-    model = role_model("planner")
-    url = f"{settings.litellm_url.rstrip('/')}/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {settings.litellm_master_key}",
-        "Content-Type": "application/json",
-    }
-    body = {
-        "model": model,
-        "messages": messages,
-        "temperature": 0.4,
-        "response_format": {"type": "json_object"},
-    }
-    with httpx.Client(timeout=120.0) as client:
-        resp = client.post(url, headers=headers, json=body)
-        if resp.status_code >= 400:
-            # Some gateways reject response_format — retry without
-            body.pop("response_format", None)
-            resp = client.post(url, headers=headers, json=body)
-        if resp.status_code >= 400:
-            raise RuntimeError(f"CTO LLM failed ({resp.status_code}): {resp.text[:800]}")
-        data = resp.json()
-    content = (
-        ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
-    )
-    usage = data.get("usage") or {}
-    # Rough cost if provider omits dollars — haiku-class default
-    prompt_t = int(usage.get("prompt_tokens") or 0)
-    completion_t = int(usage.get("completion_tokens") or 0)
-    cost = Decimal(str(usage.get("cost") or 0))
-    if cost <= 0 and (prompt_t or completion_t):
-        cost = (Decimal(prompt_t) * Decimal("0.000001") + Decimal(completion_t) * Decimal("0.000005"))
-    if cost <= 0:
-        cost = Decimal("0.01")
-    return content, cost
-
-
 def apply_actions(
     db: Session, project: Project, actions: list[Any]
 ) -> list[dict[str, Any]]:
@@ -289,6 +276,102 @@ def apply_actions(
                 )
                 db.add(item)
                 applied.append({"type": kind, "id": str(item.id), "title": title})
+            elif kind == "update_context":
+                md = str(raw.get("context_markdown") or "").strip()
+                if not md:
+                    continue
+                project.context_markdown = md
+                applied.append({"type": kind, "chars": len(md)})
+            elif kind == "upsert_module":
+                title = (raw.get("title") or "").strip()
+                if not title:
+                    continue
+                product = None
+                if raw.get("product_id"):
+                    try:
+                        product = db.get(PrdProduct, uuid.UUID(str(raw["product_id"])))
+                    except ValueError:
+                        product = None
+                    if product and product.project_id != project.id:
+                        product = None
+                slug = (raw.get("slug") or re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-"))[
+                    :80
+                ]
+                if product is None:
+                    product = PrdProduct(
+                        id=uuid.uuid4(),
+                        project_id=project.id,
+                        slug=slug or f"mod-{uuid.uuid4().hex[:8]}",
+                        title=title,
+                        summary=str(raw.get("summary") or ""),
+                        build_order=int(raw.get("build_order") or 50),
+                        status="indexed",
+                    )
+                    db.add(product)
+                else:
+                    product.title = title
+                    if raw.get("summary") is not None:
+                        product.summary = str(raw.get("summary") or "")
+                    if raw.get("slug"):
+                        product.slug = str(raw["slug"])[:80]
+                    if raw.get("build_order") is not None:
+                        product.build_order = int(raw["build_order"])
+                applied.append(
+                    {"type": kind, "id": str(product.id), "title": product.title}
+                )
+            elif kind == "upsert_requirement":
+                text = str(raw.get("text") or "").strip()
+                if not text:
+                    continue
+                req = None
+                if raw.get("requirement_id"):
+                    try:
+                        req = db.get(PrdRequirement, uuid.UUID(str(raw["requirement_id"])))
+                    except ValueError:
+                        req = None
+                product_id = None
+                if raw.get("product_id"):
+                    try:
+                        product_id = uuid.UUID(str(raw["product_id"]))
+                    except ValueError:
+                        product_id = None
+                if product_id is None and req is not None:
+                    product_id = req.product_id
+                if product_id is None:
+                    first = db.scalar(
+                        select(PrdProduct).where(PrdProduct.project_id == project.id)
+                    )
+                    product_id = first.id if first else None
+                if product_id is None:
+                    continue
+                product = db.get(PrdProduct, product_id)
+                if product is None or product.project_id != project.id:
+                    continue
+                req_key = str(raw.get("req_key") or "R").strip()[:32] or "R"
+                if req is None:
+                    req = PrdRequirement(
+                        id=uuid.uuid4(),
+                        product_id=product_id,
+                        req_key=req_key,
+                        text=text,
+                        status="open",
+                    )
+                    db.add(req)
+                else:
+                    if req.product_id != product_id and product_id:
+                        # keep on original product unless moving within project
+                        pass
+                    req.text = text
+                    if raw.get("req_key"):
+                        req.req_key = req_key
+                applied.append(
+                    {
+                        "type": kind,
+                        "id": str(req.id),
+                        "req_key": req.req_key,
+                        "product_id": str(req.product_id),
+                    }
+                )
             elif kind == "update_task":
                 try:
                     tid = uuid.UUID(str(raw.get("task_id")))
@@ -388,9 +471,18 @@ def chat(
             }
         )
 
-    raw, cost = _call_litellm(eff, llm_messages)
-    parsed = _parse_llm_json(raw)
-    reply_text = str(parsed.get("reply") or raw or "").strip() or "(no reply)"
+    try:
+        parsed, cost = call_role_llm(
+            eff, "cto", llm_messages, temperature=0.4, timeout=120.0
+        )
+    except (ValueError, RuntimeError, json.JSONDecodeError) as exc:
+        # Soft fallback: store error as reply so chat history still works
+        parsed = {
+            "reply": f"I hit an error talking to the model: {exc}",
+            "actions": [],
+        }
+        cost = Decimal("0")
+    reply_text = str(parsed.get("reply") or "").strip() or "(no reply)"
     actions = parsed.get("actions") if isinstance(parsed.get("actions"), list) else []
     applied = apply_actions(db, project, actions)
 

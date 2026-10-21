@@ -80,6 +80,10 @@ export type Project = {
   status: string;
   prd_path?: string | null;
   has_prd?: boolean;
+  context_markdown?: string;
+  index_status?: string;
+  index_error?: string | null;
+  indexed_at?: string | null;
   repo_url?: string | null;
   repo_branch?: string;
   repo_path?: string | null;
@@ -104,6 +108,7 @@ export type ProjectDetail = {
   modules: PrdModule[];
   sprint_count: number;
   open_hitl: number;
+  open_backlog?: number;
 };
 
 export type Sprint = {

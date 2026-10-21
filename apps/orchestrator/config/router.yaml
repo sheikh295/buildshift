@@ -1,11 +1,17 @@
 # Role → tier / model routing. Aliases must exist in services/litellm/config.yaml.
-# All roles use claude-haiku-5-5 for this local prod bring-up.
 roles:
-  prd_indexer:
-    tier: T2
+  cto:
+    tier: T3
     model: claude-haiku-5-5
+  pm:
+    tier: T3
+    model: claude-haiku-5-5
+  # Legacy aliases (Control / old configs)
   planner:
     tier: T3
+    model: claude-haiku-5-5
+  prd_indexer:
+    tier: T2
     model: claude-haiku-5-5
   test_author:
     tier: T1

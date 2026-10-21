@@ -81,15 +81,24 @@ export const orch = {
   syncRepo: (projectId: string) =>
     api<Project>(`/projects/${projectId}/repo/sync`, { method: "POST" }),
   uploadPrd: (projectId: string, markdown: string, sourceName = "uploaded.md") =>
-    api<{ project_id: string; modules: number; module_ids: string[] }>(
-      `/projects/${projectId}/prd`,
-      { method: "POST", body: JSON.stringify({ markdown, source_name: sourceName }) }
-    ),
+    api<{
+      project_id: string;
+      modules: number;
+      module_ids: string[];
+      index_status?: string;
+      cost_usd?: number;
+    }>(`/projects/${projectId}/prd`, {
+      method: "POST",
+      body: JSON.stringify({ markdown, source_name: sourceName }),
+    }),
   reindexPrd: (projectId: string) =>
-    api<{ project_id: string; modules: number; module_ids: string[] }>(
-      `/projects/${projectId}/reindex`,
-      { method: "POST" }
-    ),
+    api<{
+      project_id: string;
+      modules: number;
+      module_ids: string[];
+      index_status?: string;
+      cost_usd?: number;
+    }>(`/projects/${projectId}/reindex`, { method: "POST" }),
   ctoChatHistory: (projectId: string) =>
     api<CtoChatMessage[]>(`/projects/${projectId}/cto/chat`),
   ctoChat: (projectId: string, message: string) =>

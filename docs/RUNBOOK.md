@@ -26,7 +26,7 @@ make smoke-office
 
 Office UI: `http://127.0.0.1:3000` — enter `OPERATOR_TOKEN` if set in `.env` (empty token = open local mode).
 
-In the office **Plan** panel you can upload or paste a markdown PRD (Index & kickoff), then Propose → Approve. CLI still works: `buildshift prd index /path/to.md`.
+**Planning flow (CTO + PM):** In **Projects**, upload a narrative PRD — the **CTO** LLM indexes it into modules, requirements, and living `context_markdown`. In **Plan**, **Propose** asks the **PM** LLM to pack a sprint (prefers open backlog). Review the Board, then **Kick off**. After a sprint, use **Chat with CTO** for QA/fixes (CTO files backlog); Propose again for a fix sprint.
 
 ## Control plane vs `.env`
 
@@ -60,20 +60,32 @@ docker compose exec orchestrator buildshift control settings set '{"limits":{"da
 | `make smoke-hud` | Projects / sprints / HITL tree / usage |
 | `make kill ARGS=true` | Global kill switch on |
 
-### Planning CLI flow
+### Planning CLI flow (project-scoped)
 
 ```bash
-# Index a PRD (or use fixtures/sample-prd.md via make smoke-plan)
-curl -s http://127.0.0.1:8080/prd/products | python3 -m json.tool
-
-# Propose + approve a day plan for a product UUID
-curl -s -X POST http://127.0.0.1:8080/plans/propose \
-  -H 'content-type: application/json' \
-  -d '{"product_id":"<uuid>","max_tickets":3}'
-curl -s -X POST http://127.0.0.1:8080/plans/<plan_id>/approve
+# Create project, upload PRD (CTO LLM index), propose sprint (PM LLM), kickoff
+curl -s -X POST http://127.0.0.1:8080/projects \
+  -H "authorization: Bearer $OPERATOR_TOKEN" -H 'content-type: application/json' \
+  -d '{"title":"My app"}'
+curl -s -X POST http://127.0.0.1:8080/projects/<project_id>/prd \
+  -H "authorization: Bearer $OPERATOR_TOKEN" -H 'content-type: application/json' \
+  -d '{"markdown":"# PRD\n...","source_name":"prd.md"}'
+curl -s -X POST http://127.0.0.1:8080/projects/<project_id>/sprints/propose \
+  -H "authorization: Bearer $OPERATOR_TOKEN" -H 'content-type: application/json' \
+  -d '{"capacity_hours":3}'
+curl -s -X POST http://127.0.0.1:8080/sprints/<sprint_id>/kickoff \
+  -H "authorization: Bearer $OPERATOR_TOKEN"
 ```
 
-Role → model routing is edited in the office **Control** panel (seeded from `apps/orchestrator/config/router.yaml`; aliases must exist in `services/litellm/config.yaml`).
+### Post-sprint QA loop
+
+1. Sprint finishes (or Pause when done enough). Manually test the product.
+2. **Chat with CTO** (same project): describe fixes/changes in Boss language.
+3. CTO applies `add_backlog` (and optionally `update_context` / requirements). Does **not** start workers.
+4. **Plan → Propose** (e.g. 1–2h): PM consumes open backlog first.
+5. Board review → Kickoff.
+
+Role → model routing (`cto`, `pm`, implementer, …) is edited in the office **Control** panel (seeded from `apps/orchestrator/config/router.yaml`; aliases must exist in `services/litellm/config.yaml`).
 
 ### Per-project git repo
 

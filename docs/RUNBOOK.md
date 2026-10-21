@@ -85,7 +85,7 @@ curl -s -X POST http://127.0.0.1:8080/sprints/<sprint_id>/kickoff \
 4. **Plan → Propose** (e.g. 1–2h): PM consumes open backlog first.
 5. Board review → Kickoff.
 
-Role → model routing (`cto`, `pm`, implementer, …) is edited in the office **Control** panel (seeded from `apps/orchestrator/config/router.yaml`; aliases must exist in `services/litellm/config.yaml`).
+Role → model routing (`cto`, `pm`, implementer, …) is edited in the office **Control** panel (seeded from `apps/orchestrator/config/router.yaml`; aliases must exist in `services/litellm/config.yaml`). Defaults are OpenAI (`gpt-4o-mini` / `gpt-4.1-mini`); Gemini and Claude aliases are registered for later. LLM traffic: **orchestrator/workers → LiteLLM → Vercel AI Gateway** (`VERCEL_AI_GATEWAY_API_KEY` in `.env`).
 
 ### Per-project git repo
 

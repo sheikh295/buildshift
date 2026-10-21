@@ -1,28 +1,28 @@
-# Role → tier / model routing. Aliases must exist in services/litellm/config.yaml.
+# Role → model. Aliases must exist in services/litellm/config.yaml.
+# Default: $0 Minimax for testing sprints (stretch Vercel free credits).
 roles:
   cto:
     tier: T3
-    model: claude-haiku-5-5
+    model: minimax-m3.1-flash
   pm:
     tier: T3
-    model: claude-haiku-5-5
-  # Legacy aliases (Control / old configs)
+    model: minimax-m3.1-flash
   planner:
     tier: T3
-    model: claude-haiku-5-5
+    model: minimax-m3.1-flash
   prd_indexer:
     tier: T2
-    model: claude-haiku-5-5
+    model: minimax-m3.1-flash
   test_author:
     tier: T1
-    model: claude-haiku-5-5
+    model: minimax-m3.1-flash
   implementer:
     tier: T1
-    model: claude-haiku-5-5
+    model: minimax-m3.1-flash
     escalate_to: T2
   reviewer:
     tier: T2
-    model: claude-haiku-5-5
+    model: minimax-m3.1-flash
 
 limits:
   task_budget_usd: 3.0

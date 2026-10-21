@@ -22,6 +22,8 @@ services:
       - ./services/litellm/config.yaml:/app/config.yaml:ro
     environment:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-buildshift-local}
+      VERCEL_AI_GATEWAY_API_KEY: ${VERCEL_AI_GATEWAY_API_KEY:-}
+      # Optional direct providers (unused when routing via Vercel AI Gateway)
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     command: ["--config", "/app/config.yaml", "--port", "4000", "--host", "0.0.0.0"]
@@ -67,7 +69,7 @@ services:
       GITHUB_API_URL: ${GITHUB_API_URL:-https://api.github.com}
       LITELLM_URL: http://litellm:4000
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-buildshift-local}
-      DEFAULT_IMPLEMENTER_MODEL: ${DEFAULT_IMPLEMENTER_MODEL:-claude-sonnet-4-5}
+      DEFAULT_IMPLEMENTER_MODEL: ${DEFAULT_IMPLEMENTER_MODEL:-minimax-m3.1-flash}
       ROUTER_CONFIG_PATH: /app/config/router.yaml
       MULTI_ROLE_PIPELINE: ${MULTI_ROLE_PIPELINE:-true}
       OPERATOR_TOKEN: ${OPERATOR_TOKEN:-}

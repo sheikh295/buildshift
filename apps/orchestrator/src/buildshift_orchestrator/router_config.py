@@ -10,13 +10,14 @@ from buildshift_orchestrator.config import get_settings
 
 DEFAULT_ROUTER: dict[str, Any] = {
     "roles": {
-        "cto": {"tier": "T3", "model": "claude-haiku-5-5"},
-        "pm": {"tier": "T3", "model": "claude-haiku-5-5"},
-        "planner": {"tier": "T3", "model": "claude-haiku-5-5"},  # legacy alias → cto
-        "prd_indexer": {"tier": "T2", "model": "claude-haiku-5-5"},  # unused; prefer cto
-        "test_author": {"tier": "T1", "model": "claude-haiku-5-5"},
-        "implementer": {"tier": "T1", "model": "claude-haiku-5-5", "escalate_to": "T2"},
-        "reviewer": {"tier": "T2", "model": "claude-haiku-5-5"},
+        # $0 Minimax via Vercel AI Gateway (testing). Switch to qwen/mistral/mimo in Control.
+        "cto": {"tier": "T3", "model": "minimax-m3.1-flash"},
+        "pm": {"tier": "T3", "model": "minimax-m3.1-flash"},
+        "planner": {"tier": "T3", "model": "minimax-m3.1-flash"},  # legacy alias → cto
+        "prd_indexer": {"tier": "T2", "model": "minimax-m3.1-flash"},  # unused; prefer cto
+        "test_author": {"tier": "T1", "model": "minimax-m3.1-flash"},
+        "implementer": {"tier": "T1", "model": "minimax-m3.1-flash", "escalate_to": "T2"},
+        "reviewer": {"tier": "T2", "model": "minimax-m3.1-flash"},
     },
     "limits": {
         "task_budget_usd": 3.0,

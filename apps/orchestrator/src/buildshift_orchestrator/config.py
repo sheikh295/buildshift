@@ -45,7 +45,7 @@ class Settings(BaseSettings):
 
     litellm_url: str = "http://litellm:4000"
     litellm_master_key: str = "sk-buildshift-local"
-    default_implementer_model: str = "claude-sonnet-4-5"
+    default_implementer_model: str = "minimax-m3.1-flash"
 
     # Office / API auth (empty = open, for local smoke). Dashboard sends Bearer or X-Operator-Token.
     operator_token: str = ""

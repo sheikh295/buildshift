@@ -1,21 +1,130 @@
-# Minimal LiteLLM config for local / VPS bring-up.
-# Add models as you obtain keys. Orchestrator talks to this gateway only.
+# LiteLLM → Vercel AI Gateway. Aliases must match Control / router.yaml model names.
+# Prefer $0 free models for testing; cheap paid ≤ ~$0.15/$0.50 per 1M also registered.
 
 model_list:
+  # --- $0 free (max stretch for testing sprints) ---
+  - model_name: minimax-m3.1-flash
+    litellm_params:
+      model: vercel_ai_gateway/minimax/minimax-m3.1-flash
+      api_key: os.environ/VERCEL_AI_GATEWAY_API_KEY
+
+  - model_name: nemotron-3.5-lightning-free
+    litellm_params:
+      model: vercel_ai_gateway/nvidia/nemotron-3.5-lightning-free
+      api_key: os.environ/VERCEL_AI_GATEWAY_API_KEY
+
+  # --- Cheap paid (≈ ≤ $0.15 / $0.50 per 1M) ---
+  - model_name: mistral-nemo
+    litellm_params:
+      model: vercel_ai_gateway/mistral/mistral-nemo
+      api_key: os.environ/VERCEL_AI_GATEWAY_API_KEY
+
+  - model_name: ling-3.0-flash
+    litellm_params:
+      model: vercel_ai_gateway/inclusionai/ling-3.0-flash
+      api_key: os.environ/VERCEL_AI_GATEWAY_API_KEY
+
+  - model_name: qwen3.7-flash
+    litellm_params:
+      model: vercel_ai_gateway/alibaba/qwen3.7-flash
+      api_key: os.environ/VERCEL_AI_GATEWAY_API_KEY
+
+  - model_name: gpt-oss-20b
+    litellm_params:
+      model: vercel_ai_gateway/openai/gpt-oss-20b
+      api_key: os.environ/VERCEL_AI_GATEWAY_API_KEY
+
+  - model_name: nova-micro
+    litellm_params:
+      model: vercel_ai_gateway/amazon/nova-micro
+      api_key: os.environ/VERCEL_AI_GATEWAY_API_KEY
+
+  - model_name: nova-lite
+    litellm_params:
+      model: vercel_ai_gateway/amazon/nova-lite
+      api_key: os.environ/VERCEL_AI_GATEWAY_API_KEY
+
+  - model_name: mimo-v2.6-flash
+    litellm_params:
+      model: vercel_ai_gateway/xiaomi/mimo-v2.6-flash
+      api_key: os.environ/VERCEL_AI_GATEWAY_API_KEY
+
+  - model_name: mimo-v2.5
+    litellm_params:
+      model: vercel_ai_gateway/xiaomi/mimo-v2.5
+      api_key: os.environ/VERCEL_AI_GATEWAY_API_KEY
+
+  - model_name: gemini-2.5-flash-lite
+    litellm_params:
+      model: vercel_ai_gateway/google/gemini-2.5-flash-lite
+      api_key: os.environ/VERCEL_AI_GATEWAY_API_KEY
+
+  - model_name: gemma-4-31b-it
+    litellm_params:
+      model: vercel_ai_gateway/google/gemma-4-31b-it
+      api_key: os.environ/VERCEL_AI_GATEWAY_API_KEY
+
+  - model_name: gemma-4-26b-a4b-it
+    litellm_params:
+      model: vercel_ai_gateway/google/gemma-4-26b-a4b-it
+      api_key: os.environ/VERCEL_AI_GATEWAY_API_KEY
+
+  # --- Slightly higher but still useful (kept for Control) ---
+  - model_name: gemini-2.5-flash
+    litellm_params:
+      model: vercel_ai_gateway/google/gemini-2.5-flash
+      api_key: os.environ/VERCEL_AI_GATEWAY_API_KEY
+
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: vercel_ai_gateway/openai/gpt-4o-mini
+      api_key: os.environ/VERCEL_AI_GATEWAY_API_KEY
+
+  - model_name: gpt-4.1-mini
+    litellm_params:
+      model: vercel_ai_gateway/openai/gpt-4.1-mini
+      api_key: os.environ/VERCEL_AI_GATEWAY_API_KEY
+
+  - model_name: gpt-4o
+    litellm_params:
+      model: vercel_ai_gateway/openai/gpt-4o
+      api_key: os.environ/VERCEL_AI_GATEWAY_API_KEY
+
+  - model_name: gpt-4.1
+    litellm_params:
+      model: vercel_ai_gateway/openai/gpt-4.1
+      api_key: os.environ/VERCEL_AI_GATEWAY_API_KEY
+
+  - model_name: gemini-2.5-pro
+    litellm_params:
+      model: vercel_ai_gateway/google/gemini-2.5-pro
+      api_key: os.environ/VERCEL_AI_GATEWAY_API_KEY
+
+  - model_name: gemini-3-flash
+    litellm_params:
+      model: vercel_ai_gateway/google/gemini-3-flash
+      api_key: os.environ/VERCEL_AI_GATEWAY_API_KEY
+
+  # --- Claude (paid gateway credits / often free-tier blocked) ---
   - model_name: claude-haiku-5-5
     litellm_params:
-      model: anthropic/claude-haiku-5-5
-      api_key: os.environ/ANTHROPIC_API_KEY
+      model: vercel_ai_gateway/anthropic/claude-haiku-5.5
+      api_key: os.environ/VERCEL_AI_GATEWAY_API_KEY
 
   - model_name: claude-sonnet-4-5
     litellm_params:
-      model: anthropic/claude-sonnet-4-5
-      api_key: os.environ/ANTHROPIC_API_KEY
+      model: vercel_ai_gateway/anthropic/claude-sonnet-4.5
+      api_key: os.environ/VERCEL_AI_GATEWAY_API_KEY
 
   - model_name: claude-haiku-4-5
     litellm_params:
-      model: anthropic/claude-haiku-4-5
-      api_key: os.environ/ANTHROPIC_API_KEY
+      model: vercel_ai_gateway/anthropic/claude-haiku-4.5
+      api_key: os.environ/VERCEL_AI_GATEWAY_API_KEY
+
+  - model_name: claude-sonnet-5-5
+    litellm_params:
+      model: vercel_ai_gateway/anthropic/claude-sonnet-5.5
+      api_key: os.environ/VERCEL_AI_GATEWAY_API_KEY
 
 litellm_settings:
   drop_params: true

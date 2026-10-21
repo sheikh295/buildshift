@@ -150,7 +150,11 @@ def build_prompt(task: Task, role: str) -> str:
         f"## Acceptance criteria\n\n{task.acceptance_criteria or '(none)'}\n\n"
         f"## Owned paths\n\n{paths}\n\n"
         f"## Instructions\n\n{role_blurb}\n"
-        f"Do not push or open a PR — the orchestrator handles that.\n"
+        f"Do not push or open a PR — the orchestrator handles that.\n\n"
+        f"## Sandbox\n\n"
+        f"Work only under `/workspace` (this checkout). Do not access other directories, "
+        f"repos, or the host. Do not clone/fetch/push. For private GitHub pages of this "
+        f"project only, use `buildshift-fetch '<url>'` (you cannot see or use the PAT).\n"
     )
 
 
@@ -391,6 +395,7 @@ def _run_stage(db: Session, settings: Settings, task: Task, role: str) -> None:
             prompt=build_prompt(task, role),
             role=role,
             owned_paths=list(task.owned_paths or []),
+            clone_url=clone_url,
         )
         run.logs = logs[-100_000:]
         if exit_code != 0:
@@ -579,6 +584,7 @@ def run_task_legacy(db: Session, settings: Settings, task: Task) -> None:
             prompt=build_prompt(task, "implementer"),
             role="implementer",
             owned_paths=list(task.owned_paths or []),
+            clone_url=clone_url,
         )
         run.logs = logs[-100_000:]
         if exit_code != 0:

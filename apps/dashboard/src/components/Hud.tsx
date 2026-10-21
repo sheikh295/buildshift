@@ -5,11 +5,13 @@ import { orch } from "@/lib/api";
 import type {
   CtoChatMessage,
   EodDigest,
+  EventRow,
   HitlTree,
   Project,
   ProjectDetail,
   RuntimeSettings,
   Selection,
+  SessionLogs,
   Sprint,
   SprintDetail,
   Task,
@@ -26,6 +28,130 @@ type Panel =
   | "control"
   | "cto"
   | null;
+
+function AgentActivityLog({ role }: { role: string }) {
+  const [rows, setRows] = useState<EventRow[]>([]);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      const kindPrefix =
+        role === "cto" || role === "planner"
+          ? "cto."
+          : role === "pm"
+            ? "pm."
+            : "";
+      orch
+        .events(0, {
+          limit: 25,
+          role: role === "planner" ? "cto" : role || undefined,
+          kind_prefix: kindPrefix || undefined,
+        })
+        .then((list) => {
+          if (!cancelled) {
+            setRows(list.slice(-20).reverse());
+            setErr("");
+          }
+        })
+        .catch((e) => {
+          if (!cancelled) setErr(String(e));
+        });
+    };
+    load();
+    const t = setInterval(load, 2500);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [role]);
+
+  if (!role || role === "developers" || role.startsWith("desk-")) return null;
+
+  return (
+    <div className="agent-log">
+      <h3 className="sub">Activity log</h3>
+      {err && <p className="err">{err}</p>}
+      {rows.length === 0 && <p className="muted">No recent events for this role.</p>}
+      <ul className="tree">
+        {rows.map((e) => (
+          <li key={e.id}>
+            <span className="tag">{e.kind}</span>{" "}
+            <span className="muted">{new Date(e.ts).toLocaleTimeString()}</span>
+            <div className="body-text">{e.summary || "—"}</div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function AgentSessionLogs({
+  role,
+  taskId,
+}: {
+  role: string;
+  taskId?: string | null;
+}) {
+  const [logs, setLogs] = useState<SessionLogs | null>(null);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      orch
+        .sessionLogs({
+          role: role === "planner" ? "cto" : role || undefined,
+          task_id: taskId || undefined,
+          lines: 20,
+        })
+        .then((data) => {
+          if (!cancelled) {
+            setLogs(data);
+            setErr("");
+          }
+        })
+        .catch((e) => {
+          if (!cancelled) setErr(String(e));
+        });
+    };
+    load();
+    const t = setInterval(load, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [role, taskId]);
+
+  if (!role || role === "developers" || role.startsWith("desk-")) return null;
+
+  const meta = [
+    logs?.source && logs.source !== "none" ? logs.source : null,
+    logs?.harness,
+    logs?.model,
+    logs?.status,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  return (
+    <div className="agent-session-logs">
+      <h3 className="sub">Session logs</h3>
+      {meta && <p className="muted session-log-meta">{meta}</p>}
+      {err && <p className="err">{err}</p>}
+      {!err && (!logs || logs.lines.length === 0) && (
+        <p className="muted">
+          {role === "cto" || role === "pm" || role === "planner"
+            ? "No worker session for this desk — see Activity log for planning events."
+            : "No session output yet."}
+        </p>
+      )}
+      {logs && logs.lines.length > 0 && (
+        <pre className="session-log-tail">{logs.lines.join("\n")}</pre>
+      )}
+    </div>
+  );
+}
 
 function formatGoals(goals: unknown): string {
   if (!goals) return "";
@@ -220,6 +346,17 @@ export function Hud({ tasks, selection, onCloseInspector, onRefresh }: Props) {
               </button>
             </div>
           )}
+          <AgentActivityLog
+            role={
+              selection.agent.role === "planner" ? "cto" : selection.agent.role
+            }
+          />
+          <AgentSessionLogs
+            role={
+              selection.agent.role === "planner" ? "cto" : selection.agent.role
+            }
+            taskId={selection.agent.taskId || selection.task?.id}
+          />
           {selection.task && (
             <>
               <h3 className="sub">Linked task</h3>
@@ -433,17 +570,25 @@ function ProjectsPanel({
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const load = async (prefer?: string) => {
+  const load = async (prefer?: string | null) => {
     const list = await orch.projects();
     setProjects(list);
-    const id = prefer || projectId || list[0]?.id || "";
+    const id =
+      prefer === null || prefer === ""
+        ? list[0]?.id || ""
+        : prefer || projectId || list[0]?.id || "";
     if (id) {
       onSelect(id);
       const d = await orch.project(id);
       setDetail(d);
       setRepoUrl(d.project.repo_url || "");
       setRepoBranch(d.project.repo_branch || "main");
-    } else setDetail(null);
+    } else {
+      onSelect("");
+      setDetail(null);
+      setRepoUrl("");
+      setRepoBranch("main");
+    }
   };
 
   useEffect(() => {
@@ -508,6 +653,38 @@ function ProjectsPanel({
             · PRD {detail.project.has_prd ? "uploaded" : "missing"} · repo{" "}
             {detail.project.has_repo ? "connected" : "not set"}
           </p>
+          <div className="row">
+            <button
+              type="button"
+              className="ghost"
+              disabled={!projectId || busy}
+              title="Permanently delete this project and all related data"
+              onClick={async () => {
+                if (!projectId || !detail) return;
+                const ok = window.confirm(
+                  `Delete project “${detail.project.title}”?\n\nThis removes sprints, tasks, PRD index, backlog, CTO chat, and local repo mirrors. This cannot be undone.`
+                );
+                if (!ok) return;
+                setBusy(true);
+                setErr("");
+                try {
+                  const r = await orch.deleteProject(projectId);
+                  setMsg(
+                    `Deleted ${r.title} · ${r.tasks_deleted} tasks · ${r.sprints_deleted} sprints`
+                  );
+                  setMarkdown("");
+                  await load(null);
+                  onChange();
+                } catch (e) {
+                  setErr(String(e));
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              {busy ? "Deleting…" : "Delete project"}
+            </button>
+          </div>
           <fieldset>
             <legend>Git repository</legend>
             <p className="muted">
@@ -1367,9 +1544,14 @@ function ControlPanel({ onChange }: { onChange: () => void }) {
         Harness
         <select value={s.harness} onChange={(e) => setS({ ...s, harness: e.target.value })}>
           <option value="mock">mock</option>
+          <option value="opencode">opencode</option>
           <option value="claude">claude</option>
         </select>
       </label>
+      <p className="muted">
+        opencode = LiteLLM/Vercel role models · claude = Anthropic-compatible (Claude Code) ·
+        mock = no LLM
+      </p>
       <label className="check">
         <input
           type="checkbox"

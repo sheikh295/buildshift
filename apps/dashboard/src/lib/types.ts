@@ -34,6 +34,33 @@ export type EventRow = {
   payload?: Record<string, unknown>;
 };
 
+export type OfficeAgentActivity = {
+  role: string;
+  status: "working" | "idle" | string;
+  summary?: string;
+  kind?: string | null;
+  project_id?: string | null;
+  event_id?: number | null;
+  updated_at?: string | null;
+};
+
+export type OfficeActivity = {
+  agents: OfficeAgentActivity[];
+  recent: EventRow[];
+};
+
+export type SessionLogs = {
+  role?: string | null;
+  task_id?: string | null;
+  run_id?: string | null;
+  status?: string | null;
+  harness?: string | null;
+  model?: string | null;
+  source: "live" | "run" | "none" | string;
+  lines: string[];
+  updated_at?: string | null;
+};
+
 export type HumanItem = {
   id: string;
   task_id?: string | null;

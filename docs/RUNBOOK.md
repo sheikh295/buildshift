@@ -33,7 +33,7 @@ Office UI: `http://127.0.0.1:3000` — enter `OPERATOR_TOKEN` if set in `.env` (
 | Stay in `.env` | Live in Control (`runtime_settings` / office Control panel) |
 |----------------|--------------------------------------------------------------|
 | `DATABASE_URL`, ports, `HOST_DATA_DIR` | Role → model map |
-| `GITHUB_TOKEN`, LLM API keys, `LITELLM_MASTER_KEY` | Harness (`mock` / `claude`) |
+| `GITHUB_TOKEN`, LLM API keys, `LITELLM_MASTER_KEY` | Harness (`mock` / `opencode` / `claude`) |
 | `OPERATOR_TOKEN` | Budgets, max parallel, max attempts |
 | | Kill switch, proving repo/branch, multi-role flag |
 
@@ -124,10 +124,15 @@ curl -s http://127.0.0.1:8080/tasks -H 'content-type: application/json' \
 2. Clone the repo; use the same `make up` / `make down`.
 3. Keep `ORCHESTRATOR_HOST=127.0.0.1` (default). Reach it over SSH tunnel or Tailscale.
 4. Put secrets only in `.env` on the host (mode `600`).
-5. For real PRs: set `PROVING_REPO_URL`, `GITHUB_TOKEN`, and optionally `HARNESS=claude` with `INSTALL_CLAUDE=true` on worker rebuild:
+5. For real PRs: set `PROVING_REPO_URL`, `GITHUB_TOKEN`. Prefer Control harness **`opencode`** (LiteLLM/Vercel role models). Use **`claude`** only for Anthropic-compatible models (requires `INSTALL_CLAUDE=true` on worker rebuild):
 
 ```bash
-INSTALL_CLAUDE=true HARNESS=claude make build
+# Default path: OpenCode + Control role→model aliases (minimax, mistral, …)
+# In office Control: harness=opencode, then Save.
+
+# Optional Claude Code path:
+INSTALL_CLAUDE=true make build
+# Then set harness=claude in Control (and use Claude / Anthropic-compatible models)
 make up
 ```
 

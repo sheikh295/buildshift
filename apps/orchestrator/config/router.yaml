@@ -1,18 +1,18 @@
 # Role → model. Aliases must exist in services/litellm/config.yaml.
-# Default: $0 Minimax for testing sprints (stretch Vercel free credits).
+# CTO/PM need reliable JSON (Minimax dumps reasoning prose). Workers stay on $0 Minimax.
 roles:
   cto:
     tier: T3
-    model: minimax-m3.1-flash
+    model: mistral-nemo
   pm:
     tier: T3
-    model: minimax-m3.1-flash
+    model: mistral-nemo
   planner:
     tier: T3
-    model: minimax-m3.1-flash
+    model: mistral-nemo
   prd_indexer:
     tier: T2
-    model: minimax-m3.1-flash
+    model: mistral-nemo
   test_author:
     tier: T1
     model: minimax-m3.1-flash

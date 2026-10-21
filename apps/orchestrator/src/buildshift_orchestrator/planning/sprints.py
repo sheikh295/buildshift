@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import logging
 import re
+import shutil
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -14,6 +16,9 @@ from buildshift_orchestrator.control import add_daily_spend, is_kill_switch_on, 
 from buildshift_orchestrator.events import emit
 from buildshift_orchestrator.models import (
     BacklogItem,
+    CtoChatMessage,
+    DailyPlan,
+    Decision,
     Epic,
     HumanItem,
     PrdProduct,
@@ -23,6 +28,8 @@ from buildshift_orchestrator.models import (
     Task,
     TaskState,
 )
+
+log = logging.getLogger(__name__)
 from buildshift_orchestrator.planning.cto_index import index_prd_with_cto
 from buildshift_orchestrator.planning.llm import call_role_llm
 from buildshift_orchestrator.router_config import role_tier, router_limits
@@ -47,6 +54,119 @@ def create_project(db: Session, title: str, slug: str | None = None) -> Project:
     db.commit()
     db.refresh(project)
     return project
+
+
+def delete_project(
+    db: Session,
+    project_id: uuid.UUID,
+    *,
+    settings: Settings | None = None,
+) -> dict:
+    """Delete a project and related planning/execution rows; best-effort cleanup of local git mirrors."""
+    project = db.get(Project, project_id)
+    if project is None:
+        raise ValueError("project not found")
+
+    title = project.title
+    slug = project.slug
+    mirror_hint = project.repo_path
+    modules = list(
+        db.scalars(select(PrdProduct).where(PrdProduct.project_id == project.id))
+    )
+    module_ids = [m.id for m in modules]
+    sprints = list(db.scalars(select(Sprint).where(Sprint.project_id == project.id)))
+    sprint_ids = [s.id for s in sprints]
+
+    tasks = list(db.scalars(select(Task).where(Task.project_id == project.id)))
+    if sprint_ids:
+        extra = list(db.scalars(select(Task).where(Task.sprint_id.in_(sprint_ids))))
+        seen = {t.id for t in tasks}
+        for t in extra:
+            if t.id not in seen:
+                tasks.append(t)
+                seen.add(t.id)
+    task_ids = [t.id for t in tasks]
+    worktree_paths = [t.worktree_path for t in tasks if t.worktree_path]
+
+    # Explicit deletes where FKs are SET NULL (would otherwise leave orphans)
+    if task_ids:
+        for item in db.scalars(select(HumanItem).where(HumanItem.task_id.in_(task_ids))):
+            db.delete(item)
+    for item in db.scalars(select(HumanItem).where(HumanItem.project_id == project.id)):
+        db.delete(item)
+    for plan in db.scalars(select(DailyPlan).where(DailyPlan.project_id == project.id)):
+        db.delete(plan)
+    if module_ids:
+        for item in db.scalars(select(BacklogItem).where(BacklogItem.product_id.in_(module_ids))):
+            db.delete(item)
+        for dec in db.scalars(select(Decision).where(Decision.product_id.in_(module_ids))):
+            db.delete(dec)
+
+    for task in tasks:
+        db.delete(task)
+    db.flush()
+
+    # CASCADE: sprints/epics/cto_chat/prd_products (+ requirements)
+    for msg in db.scalars(
+        select(CtoChatMessage).where(CtoChatMessage.project_id == project.id)
+    ):
+        db.delete(msg)
+
+    emit(
+        db,
+        kind="project.deleted",
+        summary=f"Deleted project {title}",
+        payload={
+            "project_id": str(project.id),
+            "slug": slug,
+            "tasks_deleted": len(task_ids),
+            "modules_deleted": len(module_ids),
+            "sprints_deleted": len(sprint_ids),
+        },
+    )
+    db.delete(project)
+    db.commit()
+
+    cleaned: list[str] = []
+    if settings is not None:
+        candidates: list[Path] = []
+        if mirror_hint:
+            candidates.append(Path(mirror_hint))
+        candidates.append(settings.data_dir / "repos" / slug)
+        for path in candidates:
+            try:
+                if path.is_dir():
+                    shutil.rmtree(path)
+                    cleaned.append(str(path))
+            except OSError as exc:
+                log.warning("failed to remove project mirror %s: %s", path, exc)
+        for wt in worktree_paths:
+            try:
+                p = Path(wt)
+                if p.is_dir():
+                    shutil.rmtree(p)
+                    cleaned.append(str(p))
+            except OSError as exc:
+                log.warning("failed to remove worktree %s: %s", wt, exc)
+        # Common worktree layout: data/worktrees/{task-id}
+        for tid in task_ids:
+            p = settings.data_dir / "worktrees" / str(tid)
+            try:
+                if p.is_dir():
+                    shutil.rmtree(p)
+                    cleaned.append(str(p))
+            except OSError as exc:
+                log.warning("failed to remove worktree %s: %s", p, exc)
+
+    return {
+        "project_id": str(project_id),
+        "slug": slug,
+        "title": title,
+        "tasks_deleted": len(task_ids),
+        "modules_deleted": len(module_ids),
+        "sprints_deleted": len(sprint_ids),
+        "paths_removed": cleaned,
+    }
 
 
 def project_mirror_path(settings: Settings, project: Project) -> Path:
@@ -256,11 +376,14 @@ Return ONLY JSON:
 }
 
 Rules:
-- Total of all estimated_hours MUST be ≤ capacity_hours (do not pad; fewer tasks OK).
+- capacity_hours is the TARGET fill, not a soft suggestion: sum(estimated_hours) should be
+  between 70% and 100% of capacity_hours. Prefer more small tasks over one tiny sprint.
+- Never exceed capacity_hours.
 - Prefer open_backlog items before inventing new PRD-derived work (QA fixes first).
 - Tasks must be implementable by coding agents: real acceptance criteria and owned_paths.
 - owned_paths should fit a typical Next.js/TS repo when unknown (e.g. app/, packages/, lib/).
 - Group related tasks under epics. 1–4 epics typical for short sprints.
+- Slice modules into concrete 0.5–2h tasks until the hour budget is mostly used.
 """
 
 
@@ -383,20 +506,48 @@ def propose_sprint(
     snapshot = _pm_project_snapshot(db, project)
     import json as _json
 
+    emit(
+        db,
+        kind="pm.propose_started",
+        summary=f"PM proposing ≤{float(cap)}h sprint for {project.title}",
+        role="pm",
+        status="working",
+        payload={
+            "project_id": str(project.id),
+            "capacity_hours": float(cap),
+        },
+    )
+    db.commit()
+
     user_content = (
-        f"Propose a sprint with capacity_hours={float(cap)}.\n\n"
+        f"Propose a sprint with capacity_hours={float(cap)}. "
+        f"Fill at least {float(cap) * 0.7:.1f}h and at most {float(cap)}h of estimated work.\n\n"
         f"## Project snapshot\n```json\n{_json.dumps(snapshot, indent=2, default=str)[:100_000]}\n```"
     )
 
-    parsed, cost = call_role_llm(
-        eff,
-        "pm",
-        [
-            {"role": "system", "content": PM_SPRINT_SYSTEM},
-            {"role": "user", "content": user_content},
-        ],
-        temperature=0.3,
-    )
+    try:
+        parsed, cost = call_role_llm(
+            eff,
+            "pm",
+            [
+                {"role": "system", "content": PM_SPRINT_SYSTEM},
+                {"role": "user", "content": user_content},
+            ],
+            temperature=0.3,
+            max_tokens=8192,
+            timeout=240.0,
+        )
+    except Exception as exc:
+        emit(
+            db,
+            kind="pm.propose_failed",
+            summary=f"PM propose failed for {project.title}: {exc}"[:500],
+            role="pm",
+            status="failed",
+            payload={"project_id": str(project.id)},
+        )
+        db.commit()
+        raise
 
     epics_data = parsed.get("epics") or []
     if not isinstance(epics_data, list) or not epics_data:
@@ -427,8 +578,19 @@ def propose_sprint(
                 total_h += Decimal(str(t.get("estimated_hours") or 1))
             except Exception:
                 total_h += Decimal("1")
-    if total_h > cap * Decimal("1.15"):
-        # Soft overage: ask repair once
+    if total_h > cap * Decimal("1.15") or total_h < cap * Decimal("0.7"):
+        # Soft overage or underfill: ask repair once
+        if total_h > cap * Decimal("1.15"):
+            repair_msg = (
+                f"Total estimated_hours={float(total_h)} exceeds capacity {float(cap)}. "
+                "Return a revised JSON plan that fits ≤ capacity."
+            )
+        else:
+            repair_msg = (
+                f"Total estimated_hours={float(total_h)} is too small for capacity {float(cap)}. "
+                "Return a revised JSON plan that fills at least 70% of capacity with concrete "
+                "additional tasks from modules/backlog (still ≤ capacity)."
+            )
         parsed, cost2 = call_role_llm(
             eff,
             "pm",
@@ -441,10 +603,7 @@ def propose_sprint(
                 },
                 {
                     "role": "user",
-                    "content": (
-                        f"Total estimated_hours={float(total_h)} exceeds capacity {float(cap)}. "
-                        "Return a revised JSON plan that fits ≤ capacity."
-                    ),
+                    "content": repair_msg,
                 },
             ],
             temperature=0.2,

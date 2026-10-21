@@ -60,6 +60,9 @@ from buildshift_orchestrator.schemas import (
     KickoffOut,
     KillSwitchIn,
     KillSwitchOut,
+    OfficeActivityOut,
+    OfficeAgentActivity,
+    SessionLogsOut,
     PlanApproveOut,
     PlanOut,
     PlanProposeIn,
@@ -208,6 +211,21 @@ def projects_create(body: ProjectCreate, db: Session = Depends(get_db)) -> Proje
 @router.get("/projects", response_model=list[ProjectOut])
 def projects_list(db: Session = Depends(get_db)) -> list[ProjectOut]:
     return [_project_out(p) for p in sprint_svc.list_projects(db)]
+
+
+@router.delete("/projects/{project_id}", status_code=200)
+def projects_delete(
+    project_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """Delete project and related sprints/tasks/PRD index/CTO chat; best-effort local mirror cleanup."""
+    try:
+        return sprint_svc.delete_project(
+            db, project_id, settings=effective_settings(settings)
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/projects/{project_id}", response_model=ProjectDetailOut)
@@ -602,9 +620,160 @@ def list_events(
     db: Session = Depends(get_db),
     since: int = Query(0, ge=0, description="Return events with id > since"),
     limit: int = Query(100, ge=1, le=500),
+    role: str | None = Query(None, description="Filter by role (e.g. cto, pm)"),
+    kind_prefix: str | None = Query(None, description="Filter kinds starting with prefix"),
 ) -> list[Event]:
-    q = select(Event).where(Event.id > since).order_by(Event.id.asc()).limit(limit)
-    return list(db.scalars(q))
+    q = select(Event).where(Event.id > since)
+    if role:
+        q = q.where(Event.role == role)
+    if kind_prefix:
+        q = q.where(Event.kind.startswith(kind_prefix))
+    q = q.order_by(Event.id.desc() if (role or kind_prefix) else Event.id.asc()).limit(limit)
+    rows = list(db.scalars(q))
+    if role or kind_prefix:
+        rows.reverse()  # chronological for UI logs
+    return rows
+
+
+@router.get("/office/activity", response_model=OfficeActivityOut)
+def office_activity(
+    db: Session = Depends(get_db),
+    limit: int = Query(40, ge=1, le=200),
+) -> OfficeActivityOut:
+    """Live CTO/PM (and similar) busy state for the office floor + recent planning events."""
+    recent = list(
+        db.scalars(
+            select(Event)
+            .where(
+                (Event.role.in_(["cto", "pm", "planner"]))
+                | Event.kind.startswith("cto.")
+                | Event.kind.startswith("pm.")
+            )
+            .order_by(Event.id.desc())
+            .limit(limit)
+        )
+    )
+    # Derive busy from latest per-role event
+    start_kinds = {
+        "cto.index_started",
+        "pm.propose_started",
+        "cto.chat",  # chat is short; treat as working only if very recent — handled below
+    }
+    end_kinds = {
+        "cto.prd_indexed",
+        "cto.index_failed",
+        "pm.sprint_proposed",
+        "pm.propose_failed",
+    }
+    by_role: dict[str, Event] = {}
+    for ev in recent:
+        role = (ev.role or "").strip() or (
+            "cto" if ev.kind.startswith("cto.") else "pm" if ev.kind.startswith("pm.") else ""
+        )
+        if role == "planner":
+            role = "cto"
+        if not role or role in by_role:
+            continue
+        by_role[role] = ev
+
+    now = datetime.now(timezone.utc)
+    agents: list[OfficeAgentActivity] = []
+    for role, ev in by_role.items():
+        age = (now - ev.ts).total_seconds() if ev.ts else 9999
+        working = False
+        if ev.kind in start_kinds or (ev.status or "") == "working":
+            # index/propose can run minutes; chat only flash briefly
+            if ev.kind == "cto.chat":
+                working = age < 45
+            else:
+                working = age < 15 * 60
+        elif ev.kind in end_kinds:
+            working = False
+        elif (ev.status or "") == "working":
+            working = age < 15 * 60
+        payload = ev.payload or {}
+        agents.append(
+            OfficeAgentActivity(
+                role=role,
+                status="working" if working else "idle",
+                summary=(ev.summary or ev.kind) if working else "",
+                kind=ev.kind,
+                project_id=str(payload.get("project_id")) if payload.get("project_id") else None,
+                event_id=ev.id,
+                updated_at=ev.ts,
+            )
+        )
+    # Always include cto/pm slots so UI can clear idle
+    for role in ("cto", "pm"):
+        if not any(a.role == role for a in agents):
+            agents.append(OfficeAgentActivity(role=role, status="idle"))
+    return OfficeActivityOut(
+        agents=agents,
+        recent=[EventOut.model_validate(e) for e in reversed(recent[:25])],
+    )
+
+
+@router.get("/office/session-logs", response_model=SessionLogsOut)
+def office_session_logs(
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    role: str | None = Query(None, description="Agent role (e.g. test_author, cto)"),
+    task_id: uuid.UUID | None = Query(None, description="Prefer this task's latest run"),
+    lines: int = Query(20, ge=1, le=100),
+) -> SessionLogsOut:
+    """Last N lines of worker session output for a desk inspector."""
+    from buildshift_orchestrator.runner.docker_run import (
+        live_worker_logs,
+        strip_ansi,
+        tail_lines,
+    )
+
+    role_norm = (role or "").strip()
+    if role_norm == "planner":
+        role_norm = "cto"
+
+    run: Run | None = None
+    if task_id is not None:
+        run = db.scalar(
+            select(Run).where(Run.task_id == task_id).order_by(Run.started_at.desc()).limit(1)
+        )
+    if run is None and role_norm and role_norm not in ("cto", "pm", "planner"):
+        run = db.scalar(
+            select(Run).where(Run.role == role_norm).order_by(Run.started_at.desc()).limit(1)
+        )
+
+    # Live docker tail while a worker is still running
+    live_tid = str(task_id) if task_id else (str(run.task_id) if run else None)
+    if live_tid and (run is None or (run.status or "") == "running"):
+        live = live_worker_logs(effective_settings(settings), live_tid, lines=lines)
+        if live is not None:
+            return SessionLogsOut(
+                role=role_norm or (run.role if run else None),
+                task_id=live_tid,
+                run_id=str(run.id) if run else None,
+                status="running",
+                harness=run.harness if run else None,
+                model=run.model if run else None,
+                source="live",
+                lines=live.splitlines(),
+                updated_at=datetime.now(timezone.utc),
+            )
+
+    if run is None:
+        return SessionLogsOut(role=role_norm or None, task_id=str(task_id) if task_id else None)
+
+    text = tail_lines(strip_ansi(run.logs or ""), lines)
+    return SessionLogsOut(
+        role=run.role,
+        task_id=str(run.task_id),
+        run_id=str(run.id),
+        status=run.status,
+        harness=run.harness,
+        model=run.model,
+        source="run" if text else "none",
+        lines=text.splitlines() if text else [],
+        updated_at=run.ended_at or run.started_at,
+    )
 
 
 @router.get("/events/stream")

@@ -1,5 +1,5 @@
 import Phaser from "phaser";
-import type { CabinDef, OfficeMap, Selection, Task } from "@/lib/types";
+import type { CabinDef, OfficeAgentActivity, OfficeMap, Selection, Task } from "@/lib/types";
 import {
   TERMINAL,
   cabinForTaskState,
@@ -46,6 +46,8 @@ type PersonEnt = {
   holdUntil: number;
   /** True once seated at desk with task delivered (or no transit needed) */
   workActive: boolean;
+  /** Planning-role activity (CTO index / PM propose) shown in inspector */
+  activitySummary: string | null;
 };
 
 type DeskEnt = {
@@ -148,8 +150,63 @@ export class OfficeScene extends Phaser.Scene {
     this.syncBindings(tasks);
   }
 
-  flashEvent(_kind: string, _taskId?: string | null) {
-    /* tokens flash on create */
+  /** Drive permanent CTO/PM desks from /office/activity + SSE. */
+  syncRoleActivity(agents: OfficeAgentActivity[]) {
+    const byRole = new Map(agents.map((a) => [a.role, a]));
+    // planner legacy → cto
+    if (!byRole.has("cto") && byRole.has("planner")) {
+      byRole.set("cto", byRole.get("planner")!);
+    }
+    for (const p of this.people.values()) {
+      if (!p.permanent) continue;
+      const role = p.role === "planner" ? "cto" : p.role;
+      const act = byRole.get(role);
+      if (!act) continue;
+      const working = act.status === "working";
+      if (working) {
+        p.workActive = true;
+        p.status = "working";
+        p.activitySummary = act.summary || act.kind || "Working…";
+        this.applyPose(p, "work");
+        this.setDeskVisual(p.cabinId, p.seat, { occupied: true, working: true });
+        const chair = this.deskChairFor(p);
+        if (chair) {
+          p.container.setPosition(chair.x, chair.y);
+          p.path = [];
+        }
+      } else if (!p.taskId) {
+        p.workActive = false;
+        p.activitySummary = null;
+        if (p.status === "working") {
+          p.status = "idle";
+          this.applyPose(p, "sit");
+          this.setDeskVisual(p.cabinId, p.seat, { occupied: true, working: false });
+        }
+      }
+    }
+  }
+
+  /** Called when the React HUD closes the inspector. */
+  clearSelection() {
+    this.selectedKey = null;
+    for (const person of this.people.values()) {
+      person.sprite.setScale(1);
+    }
+  }
+
+  flashEvent(kind: string, _taskId?: string | null) {
+    if (kind.startsWith("cto.") || kind.startsWith("pm.")) {
+      const role = kind.startsWith("cto.") ? "cto" : "pm";
+      for (const p of this.people.values()) {
+        if (!p.permanent) continue;
+        const r = p.role === "planner" ? "cto" : p.role;
+        if (r !== role) continue;
+        p.sprite.setTint(0xfff3c4);
+        this.time.delayedCall(500, () => {
+          if (p.sprite.active) p.sprite.clearTint();
+        });
+      }
+    }
   }
 
   // ——— Drawing ———
@@ -404,6 +461,7 @@ export class OfficeScene extends Phaser.Scene {
       chatPartner: null,
       holdUntil: 0,
       workActive: false,
+      activitySummary: null,
     });
   }
 
@@ -615,7 +673,7 @@ export class OfficeScene extends Phaser.Scene {
       const cabin = getCabin(this.mapData, cabinId);
       if (!cabin) continue;
 
-      // Prefer stable person assignment
+      // Prefer stable person assignment (hired workers only — never permanent CTO/PM)
       for (const task of list) {
         const prev = this.bindings.get(task.id);
         const sameCabin = prev && prev.cabinId === cabinId;
@@ -623,11 +681,21 @@ export class OfficeScene extends Phaser.Scene {
         let person: PersonEnt | undefined;
         if (sameCabin && prev.personId) {
           person = this.people.get(prev.personId);
+          if (person?.permanent) {
+            this.releasePersonHold(person.id);
+            person = undefined;
+          }
         }
         if (!person || person.cabinId !== cabinId || this.leaving.has(person.id)) {
           person = this.pickFreePerson(cabinId, list, task.id);
         }
-        if (!person) continue;
+        if (!person) {
+          // Planner cabin has no hires: planned tickets stay unbound until kickoff/dev cabin.
+          if (prev?.personId) this.releasePersonHold(prev.personId);
+          this.bindings.delete(task.id);
+          this.removeToken(task.id);
+          continue;
+        }
 
         const newDesk = this.deskPos(cabinId, person.seat);
         if (!newDesk) continue;
@@ -680,9 +748,10 @@ export class OfficeScene extends Phaser.Scene {
         .filter((b) => b.cabinId === cabinId && b.taskId !== forTaskId && b.personId)
         .map((b) => b.personId!)
     );
+    // Permanent CTO/PM only do planning activity — never bind pipeline tickets to them.
     const staff = [...this.people.values()]
-      .filter((p) => p.cabinId === cabinId && !this.leaving.has(p.id))
-      .sort((a, b) => Number(b.permanent) - Number(a.permanent) || a.seat - b.seat);
+      .filter((p) => p.cabinId === cabinId && !p.permanent && !this.leaving.has(p.id))
+      .sort((a, b) => a.seat - b.seat);
 
     // Prefer person already bound to this task
     const already = staff.find((p) => p.taskId === forTaskId);
@@ -828,7 +897,7 @@ export class OfficeScene extends Phaser.Scene {
         taskId: p.taskId,
         taskTitle: task
           ? `${task.title}${bind?.delivery === "transit" ? " (in transit…)" : !p.workActive && p.taskId ? " (walking to desk…)" : ""}`
-          : null,
+          : p.activitySummary,
         permanent: p.permanent,
       },
       task: task || null,
@@ -861,7 +930,8 @@ export class OfficeScene extends Phaser.Scene {
   // ——— Idle AI (respects holdUntil) ———
 
   private advanceIdlePhase(p: PersonEnt, now: number) {
-    if (p.taskId || this.leaving.has(p.id)) return;
+    if (p.taskId || this.leaving.has(p.id) || (p.permanent && p.workActive && p.activitySummary))
+      return;
     if (now < p.holdUntil) {
       // Forced sit after handoff
       const chair = this.deskChairFor(p);

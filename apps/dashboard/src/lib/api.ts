@@ -4,10 +4,12 @@ import type {
   EventRow,
   HitlTree,
   HumanItem,
+  OfficeActivity,
   Plan,
   Project,
   ProjectDetail,
   RuntimeSettings,
+  SessionLogs,
   Sprint,
   SprintDetail,
   Task,
@@ -47,7 +49,27 @@ export const orch = {
     api<Task[]>(
       `/tasks${qs({ limit, project_id: opts?.project_id, sprint_id: opts?.sprint_id })}`
     ),
-  events: (since = 0) => api<EventRow[]>(`/events?since=${since}&limit=200`),
+  events: (
+    since = 0,
+    opts?: { limit?: number; role?: string; kind_prefix?: string }
+  ) =>
+    api<EventRow[]>(
+      `/events${qs({
+        since,
+        limit: opts?.limit ?? 200,
+        role: opts?.role,
+        kind_prefix: opts?.kind_prefix,
+      })}`
+    ),
+  officeActivity: () => api<OfficeActivity>("/office/activity"),
+  sessionLogs: (opts?: { role?: string; task_id?: string; lines?: number }) =>
+    api<SessionLogs>(
+      `/office/session-logs${qs({
+        role: opts?.role,
+        task_id: opts?.task_id,
+        lines: opts?.lines ?? 20,
+      })}`
+    ),
   hitl: (status = "open") => api<HumanItem[]>(`/hitl?status=${encodeURIComponent(status)}`),
   hitlTree: (status = "open") =>
     api<HitlTree>(`/hitl?status=${encodeURIComponent(status)}&group=tree`),
@@ -72,6 +94,16 @@ export const orch = {
       method: "POST",
       body: JSON.stringify({ title, slug: slug || null }),
     }),
+  deleteProject: (projectId: string) =>
+    api<{
+      project_id: string;
+      slug: string;
+      title: string;
+      tasks_deleted: number;
+      modules_deleted: number;
+      sprints_deleted: number;
+      paths_removed: string[];
+    }>(`/projects/${projectId}`, { method: "DELETE" }),
   project: (id: string) => api<ProjectDetail>(`/projects/${id}`),
   connectRepo: (projectId: string, repoUrl: string, repoBranch = "main", sync = true) =>
     api<Project>(`/projects/${projectId}/repo`, {

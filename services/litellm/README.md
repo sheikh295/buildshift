@@ -6,7 +6,8 @@ LiteLLM → **Vercel AI Gateway** (`VERCEL_AI_GATEWAY_API_KEY`).
 
 | Alias | Upstream | Approx $/1M |
 |-------|----------|-------------|
-| `minimax-m3.1-flash` | `minimax/minimax-m3.1-flash` | **$0** (default roles) |
+| `minimax-m3.1-flash` | `minimax/minimax-m3.1-flash` | **$0** (workers; avoid for CTO/PM JSON) |
+| `mistral-nemo` | `mistral/mistral-nemo` | Cheap; default CTO/PM (reliable JSON) |
 | `nemotron-3.5-lightning-free` | `nvidia/nemotron-3.5-lightning-free` | **$0** (use higher max_tokens) |
 | `mistral-nemo` | `mistral/mistral-nemo` | ~$0.03 / $0.03 |
 | `ling-3.0-flash` | `inclusionai/ling-3.0-flash` | ~$0.02 / $0.06 |

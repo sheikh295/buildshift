@@ -2,7 +2,13 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { orch } from "@/lib/api";
-import type { EventRow, OfficeMap, Selection, Task } from "@/lib/types";
+import type {
+  EventRow,
+  OfficeAgentActivity,
+  OfficeMap,
+  Selection,
+  Task,
+} from "@/lib/types";
 import { OfficeCanvas } from "./OfficeCanvas";
 import { Hud } from "./Hud";
 
@@ -10,6 +16,7 @@ type Props = { map: OfficeMap };
 
 export function OfficeApp({ map }: Props) {
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [activity, setActivity] = useState<OfficeAgentActivity[]>([]);
   const [selection, setSelection] = useState<Selection>(null);
   const [lastEvent, setLastEvent] = useState<EventRow | null>(null);
   const [eventExpanded, setEventExpanded] = useState(() => {
@@ -28,8 +35,9 @@ export function OfficeApp({ map }: Props) {
 
   const refresh = useCallback(async () => {
     try {
-      const list = await orch.tasks(200);
+      const [list, act] = await Promise.all([orch.tasks(200), orch.officeActivity()]);
       setTasks(list);
+      setActivity(act.agents || []);
       setError("");
     } catch (e) {
       setError(String(e));
@@ -38,9 +46,33 @@ export function OfficeApp({ map }: Props) {
 
   useEffect(() => {
     refresh();
-    const t = setInterval(refresh, 3500);
+    const t = setInterval(refresh, 2500);
     return () => clearInterval(t);
   }, [refresh]);
+
+  // Live-update an open permanent-agent inspector from activity polls (do not re-open if closed).
+  useEffect(() => {
+    setSelection((prev) => {
+      if (prev?.kind !== "agent" || !prev.agent.permanent) return prev;
+      const role = prev.agent.role === "planner" ? "cto" : prev.agent.role;
+      const act =
+        activity.find((a) => a.role === role) ||
+        (role === "cto" ? activity.find((a) => a.role === "planner") : undefined);
+      if (!act) return prev;
+      const working = act.status === "working";
+      const status = working ? "working" : prev.agent.taskId ? prev.agent.status : "idle";
+      const taskTitle = working
+        ? act.summary || act.kind || "Working…"
+        : prev.agent.taskId
+          ? prev.agent.taskTitle
+          : null;
+      if (prev.agent.status === status && prev.agent.taskTitle === taskTitle) return prev;
+      return {
+        ...prev,
+        agent: { ...prev.agent, status, taskTitle },
+      };
+    });
+  }, [activity]);
 
   useEffect(() => {
     let es: EventSource | null = null;
@@ -66,7 +98,11 @@ export function OfficeApp({ map }: Props) {
           if (
             row.kind.startsWith("task.") ||
             row.kind.startsWith("hitl.") ||
-            row.kind.startsWith("control.")
+            row.kind.startsWith("control.") ||
+            row.kind.startsWith("cto.") ||
+            row.kind.startsWith("pm.") ||
+            row.kind.startsWith("sprint.") ||
+            row.kind.startsWith("project.")
           ) {
             refresh();
           }
@@ -93,7 +129,9 @@ export function OfficeApp({ map }: Props) {
       <OfficeCanvas
         map={map}
         tasks={tasks}
+        activity={activity}
         lastEvent={lastEvent}
+        selection={selection}
         onSelect={setSelection}
       />
       {error && <div className="toast err">{error}</div>}
@@ -112,7 +150,9 @@ export function OfficeApp({ map }: Props) {
           ) : (
             <>
               #{lastEvent.id} {lastEvent.kind}
-              {lastEvent.summary ? ` — ${lastEvent.summary.slice(0, 48)}${lastEvent.summary.length > 48 ? "…" : ""}` : ""}
+              {lastEvent.summary
+                ? ` — ${lastEvent.summary.slice(0, 48)}${lastEvent.summary.length > 48 ? "…" : ""}`
+                : ""}
             </>
           )}
         </button>

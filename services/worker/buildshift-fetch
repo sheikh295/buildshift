@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Fetch a URL via the local GitHub auth proxy (PAT never exposed to the agent).
+set -euo pipefail
+URL="${1:-}"
+if [[ -z "$URL" ]]; then
+  echo "usage: buildshift-fetch <https://github.com/... or raw.githubusercontent.com/...>" >&2
+  exit 2
+fi
+PORT="${GITHUB_PROXY_PORT:-18741}"
+exec curl -fsS --get "http://127.0.0.1:${PORT}/fetch" --data-urlencode "url=${URL}"

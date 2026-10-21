@@ -316,6 +316,35 @@ class EventOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class OfficeAgentActivity(BaseModel):
+    role: str
+    status: str  # working | idle
+    summary: str = ""
+    kind: str | None = None
+    project_id: str | None = None
+    event_id: int | None = None
+    updated_at: datetime | None = None
+
+
+class OfficeActivityOut(BaseModel):
+    agents: list[OfficeAgentActivity]
+    recent: list[EventOut] = Field(default_factory=list)
+
+
+class SessionLogsOut(BaseModel):
+    """Last N lines of worker/session output for a desk (live or finished run)."""
+
+    role: str | None = None
+    task_id: str | None = None
+    run_id: str | None = None
+    status: str | None = None  # running | done | failed | …
+    harness: str | None = None
+    model: str | None = None
+    source: str = "none"  # live | run | none
+    lines: list[str] = Field(default_factory=list)
+    updated_at: datetime | None = None
+
+
 class HumanItemOut(BaseModel):
     id: uuid.UUID
     product_id: uuid.UUID | None = None

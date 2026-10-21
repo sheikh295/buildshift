@@ -178,6 +178,18 @@ def index_prd_with_cto(
     project.index_status = "pending"
     project.index_error = None
     project.updated_at = datetime.now(timezone.utc)
+    emit(
+        db,
+        kind="cto.index_started",
+        summary=f"CTO indexing PRD for {project.title}",
+        role="cto",
+        status="working",
+        payload={
+            "project_id": str(project.id),
+            "source_name": source_name,
+            "chars": len(text),
+        },
+    )
     db.commit()
     db.refresh(project)
 
@@ -196,6 +208,8 @@ def index_prd_with_cto(
                 },
             ],
             temperature=0.25,
+            max_tokens=8192,
+            timeout=240.0,
         )
         modules_data = parsed.get("modules") or []
         if not isinstance(modules_data, list) or not modules_data:
